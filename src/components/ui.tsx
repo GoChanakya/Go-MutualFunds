@@ -10,32 +10,31 @@ export type Tone = "good" | "mid" | "weak" | "none";
 export const scoreTone = (v: number | null | undefined): Tone => (v === null || v === undefined ? "none" : v >= 65 ? "good" : v >= 45 ? "mid" : "weak");
 export const toneWord: Record<Tone, string> = { good: "strong", mid: "average", weak: "weak", none: "not scored" };
 
-// Coloured score number with an accessible label (colour is never the only signal).
+// Inline score: number + small tone marker (colour is never the only signal; the title says it in words).
 export function Score({ value, size = "md" }: { value: number | null | undefined; size?: "sm" | "md" }) {
   const t = scoreTone(value);
   return (
-    <span className={`score-badge ${t} ${size}`} title={`Score ${r0(value)} (${toneWord[t]}) vs category`}>
+    <span className={`score ${t} ${size}`} title={`Score ${r0(value)} of 100 (${toneWord[t]}) vs category`}>
+      <i aria-hidden />
       {r0(value)}
     </span>
   );
 }
 
-// Ring showing a 0-100 score.
-export function ScoreRing({ value, label = "score", size = 64 }: { value: number | null | undefined; label?: string; size?: number }) {
+// Big editorial score figure with a thin progress rule under it.
+export function ScoreRing({ value, label = "Score" }: { value: number | null | undefined; label?: string; size?: number }) {
   const t = scoreTone(value);
-  const r = size / 2 - 5;
-  const c = 2 * Math.PI * r;
   const v = Math.max(0, Math.min(100, value ?? 0));
   return (
-    <div className={`ring ${t}`} style={{ width: size, height: size }} title={`${label} ${r0(value)} (${toneWord[t]})`}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
-        <circle cx={size / 2} cy={size / 2} r={r} className="ring-track" />
-        <circle cx={size / 2} cy={size / 2} r={r} className="ring-val" strokeDasharray={`${(v / 100) * c} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-      </svg>
-      <div className="ring-text">
-        <b>{r0(value)}</b>
-        <span>{label}</span>
-      </div>
+    <div className={`figure ${t}`} title={`${label} ${r0(value)} of 100 (${toneWord[t]}) vs category`}>
+      <span className="figure-label">{label}</span>
+      <span className="figure-num">
+        {r0(value)}
+        <small>/100</small>
+      </span>
+      <span className="figure-rule" aria-hidden>
+        <i style={{ width: `${v}%` }} />
+      </span>
     </div>
   );
 }
@@ -48,19 +47,19 @@ const PILLAR_LABELS: [string, string][] = [
   ["track_record", "Track record"],
 ];
 
-// Five small bars, one per pillar (0-100 vs category).
+// Five thin rules, one per pillar (0-100 vs category).
 export function PillarBars({ pillars, compact = false }: { pillars: Record<string, number | null>; compact?: boolean }) {
   return (
-    <div className={`pillar-bars${compact ? " compact" : ""}`}>
+    <div className={`pillars${compact ? " compact" : ""}`}>
       {PILLAR_LABELS.map(([k, label]) => {
         const v = pillars[k];
         return (
-          <div className="pb" key={k} title={`${label}: ${r0(v)} / 100 vs category`}>
-            <div className="pb-head">
-              <span>{compact ? label.split(" ")[0].slice(0, 5) : label}</span>
+          <div className="pillar" key={k} title={`${label}: ${r0(v)} of 100 vs category`}>
+            <div className="pillar-head">
+              <span>{compact ? label.slice(0, 3) : label}</span>
               <b>{r0(v)}</b>
             </div>
-            <div className="pb-track">
+            <div className="pillar-track">
               <i className={scoreTone(v)} style={{ width: `${Math.max(0, Math.min(100, v ?? 0))}%` }} />
             </div>
           </div>
@@ -74,17 +73,17 @@ export function Delta({ value, suffix = "%" }: { value: number | null | undefine
   if (value === null || value === undefined) return <span className="muted-num">–</span>;
   return (
     <span className={value > 0 ? "pos" : value < 0 ? "neg" : ""}>
-      {value > 0 ? "+" : ""}
-      {value.toFixed(1)}
+      {value > 0 ? "+" : value < 0 ? "−" : ""}
+      {Math.abs(value).toFixed(1)}
       {suffix}
     </span>
   );
 }
 
-// 12 dots: months the fund beat its category (batting average).
+// 12 ticks: months the fund beat its category (batting average).
 export function BattingDots({ beat, of }: { beat: number; of: number }) {
   return (
-    <span className="dots12" title={`Beat its category in ${beat} of ${of} months`}>
+    <span className="ticks" title={`Beat its category in ${beat} of ${of} months`}>
       {Array.from({ length: of }, (_, i) => (
         <i key={i} className={i < beat ? "on" : ""} />
       ))}
@@ -92,13 +91,28 @@ export function BattingDots({ beat, of }: { beat: number; of: number }) {
   );
 }
 
+// Typographic mark: "g" set in Syne on the accent.
 export function LogoMark({ size = 26 }: { size?: number }) {
   return (
-    <span className="logo-mark" style={{ width: size, height: size }} aria-hidden>
-      <svg viewBox="0 0 24 24" width={size * 0.62} height={size * 0.62} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M4 17l5-5 4 4 7-8" />
-        <path d="M15 8h5v5" />
-      </svg>
+    <span className="mark" style={{ width: size, height: size, fontSize: size * 0.72 }} aria-hidden>
+      g
     </span>
+  );
+}
+
+export function LockIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+export function Arrow() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
   );
 }

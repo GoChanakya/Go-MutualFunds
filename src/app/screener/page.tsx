@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
 import { Header, Upgrade } from "@/components/Header";
 import { SignIn } from "@/components/SignIn";
-import { BattingDots, Delta, PillarBars, ScoreRing, cr } from "@/components/ui";
+import { Arrow, BattingDots, Delta, LockIcon, PillarBars, ScoreRing, cr } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { AllocRow, FundDetail, ScreenerCard, ScreenerResult } from "@/lib/screener-types";
 
@@ -225,13 +225,17 @@ export default function ScreenerPage() {
       <div className="screener">
         {filterPanel}
         <main className="results">
+          <div className="page-head">
+            <span className="eyebrow">Screener</span>
+            <h1>
+              {res ? res.total.toLocaleString("en-IN") : "—"} <span>funds</span>
+            </h1>
+          </div>
           <div className="toolbar">
-            <button className="pill show-sm" onClick={() => setSheet(true)}>
-              Filters{active.length ? ` · ${active.length}` : ""}
+            <button className="textbtn show-sm" onClick={() => setSheet(true)}>
+              Filters{active.length ? ` (${active.length})` : ""}
             </button>
-            <div className="count-line">
-              <b>{res ? res.total.toLocaleString("en-IN") : "…"}</b> funds{loading && <span className="sub"> · updating</span>}
-            </div>
+            <div className="count-line sub">{loading ? "Updating…" : res?.locked ? "Free plan: top 3 shown" : "Sorted and scored against category peers"}</div>
             <label className="sort">
               <span className="sub">Sort by</span>
               <select value={f.sort} onChange={(e) => set("sort", e.target.value)}>
@@ -284,7 +288,7 @@ export default function ScreenerPage() {
 
           {res?.locked && res.total > res.shown && <Upgrade text={`${(res.total - res.shown).toLocaleString("en-IN")} more funds match your filters.`} />}
           {res?.has_more && (
-            <button className="pill load-more" disabled={loading} onClick={() => search(f, res.page + 1)}>
+            <button className="textbtn strong load-more" disabled={loading} onClick={() => search(f, res.page + 1)}>
               {loading ? "Loading…" : "Load more"}
             </button>
           )}
@@ -402,16 +406,16 @@ function FundCard({
 
       <div className="fcard-actions">
         <button
-          className="pill"
+          className="textbtn strong"
           aria-expanded={open}
           onClick={() => {
             setOpen((o) => !o);
             if (!open) onOpen();
           }}
         >
-          {open ? "Hide analysis" : "View analysis"}
+          {open ? "Hide analysis" : "View analysis"} <Arrow />
         </button>
-        <button className="pill" onClick={onAsk}>
+        <button className="textbtn" onClick={onAsk}>
           Ask about this fund
         </button>
         <label className={`check pick${!canPick && !picked ? " disabled" : ""}`}>
@@ -429,7 +433,9 @@ function FundCard({
                 ))}
               </div>
               <div className="locked-msg">
-                <b>🔒 Pro analysis</b>
+                <b>
+                  <LockIcon /> Pro analysis
+                </b>
                 <span>Category comparison, crash behaviour, sector allocation, rating mix and fund details.</span>
               </div>
             </div>

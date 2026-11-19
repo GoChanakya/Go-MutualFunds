@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import type { Block, Fact, FundRow } from "@/lib/types";
-import { Delta, PillarBars, Score, ScoreRing, cr, pct, r0 } from "./ui";
+import { Arrow, Delta, PillarBars, Score, ScoreRing, cr, pct, r0 } from "./ui";
 
 // **bold** only; everything else is plain text.
 function Rich({ text }: { text: string }) {
@@ -263,8 +263,8 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
                 {b.text && <p style={{ marginBottom: 10 }}>{b.text}</p>}
                 <div className="followups">
                   {b.options.slice(0, b.text ? 6 : 3).map((o, k) => (
-                    <button key={k} className="pill" onClick={() => onAsk(o)}>
-                      {o} <span aria-hidden>↗</span>
+                    <button key={k} className="follow" onClick={() => onAsk(o)}>
+                      <span>{o}</span> <Arrow />
                     </button>
                   ))}
                 </div>

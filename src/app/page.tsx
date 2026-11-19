@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
 import { Header, Upgrade } from "@/components/Header";
 import { SignIn } from "@/components/SignIn";
-import { LogoMark } from "@/components/ui";
+import { Arrow, LogoMark } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { Block, ChatContext, ChatResponse } from "@/lib/types";
 
@@ -68,10 +68,17 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [asOf, setAsOf] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const lastQuestion = useRef<HTMLDivElement>(null);
 
+  // While waiting: follow the bottom so the "reading" indicator is visible.
+  // When an answer arrives: bring the question + start of the answer to the top, so you read it from the beginning.
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth" });
+    const last = msgs[msgs.length - 1];
+    if (last && last.role !== "user" && !busy) lastQuestion.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    else end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [msgs, busy]);
+
+  const lastUserIndex = msgs.map((m) => m.role).lastIndexOf("user");
 
   // Arriving from the screener ("Ask about this fund", "Compare"): /?q=<question>
   const asked = useRef(false);
@@ -138,18 +145,30 @@ export default function Home() {
     return (
       <div className="app">
         {header}
-        <div className="empty">
-          <LogoMark size={44} />
-          <h1>Ask anything about mutual funds</h1>
-          <p className="lead">Rankings, fund deep-dives and comparisons from GoChanakya data: resilience, consistency, momentum, returns and track record.</p>
-          <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
-          <div className="starter-grid">
-            {STARTERS.map((s) => (
-              <button key={s.q} className="starter" onClick={() => send(s.q)}>
-                <b>{s.title}</b>
-                <span>{s.sub}</span>
-              </button>
-            ))}
+        <div className="hero">
+          <div className="hero-inner">
+            <span className="eyebrow">GoChanakya · Fund intelligence</span>
+            <h1>
+              Mutual funds,
+              <br />
+              read by the numbers.
+            </h1>
+            <p className="lead">Ask about any Indian mutual fund. Every answer is built from our data: resilience, consistency, momentum, returns and track record.</p>
+            <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
+            <ol className="prompts">
+              {STARTERS.map((s, k) => (
+                <li key={s.q}>
+                  <button onClick={() => send(s.q)}>
+                    <span className="idx">{String(k + 1).padStart(2, "0")}</span>
+                    <span className="p-text">
+                      <b>{s.title}</b>
+                      <span>{s.sub}</span>
+                    </span>
+                    <Arrow />
+                  </button>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
         {disclaimer}
@@ -165,7 +184,7 @@ export default function Home() {
         <div className="thread">
           {msgs.map((m, i) =>
             m.role === "user" ? (
-              <div key={i} className="user">
+              <div key={i} className="user" ref={i === lastUserIndex ? lastQuestion : undefined}>
                 {m.text}
               </div>
             ) : (
@@ -188,12 +207,8 @@ export default function Home() {
             <div className="bot-row">
               <LogoMark size={28} />
               <div className="thinking">
-                <span className="dots" aria-hidden>
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                Analysing fund data…
+                <span className="scan" aria-hidden />
+                Reading the data
               </div>
             </div>
           )}
