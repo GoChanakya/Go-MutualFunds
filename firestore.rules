@@ -1,0 +1,10 @@
+rules_version = '2';
+// Only the backend (service account) reads/writes this database. Browsers and apps get nothing directly,
+// so nobody can mark themselves "pro" or read another user's data from the client.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

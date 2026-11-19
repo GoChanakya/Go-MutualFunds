@@ -8,3 +8,4 @@ next-env.d.ts
 # never commit fund data
 *.parquet
 data-cache/
+.env

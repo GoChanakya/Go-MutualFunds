@@ -1,17 +1,20 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { REQUESTS_PER_IP_PER_DAY } from "@/lib/config/plans";
 import { getStore } from "@/lib/data/store";
 import { execute } from "@/lib/engine/handlers";
 import { parse } from "@/lib/intent";
 import { IntentSchema } from "@/lib/intent/schema";
 import type { ChatContext, ChatResponse } from "@/lib/types";
+import { clientIp, currentViewer } from "@/lib/users/auth";
+import { redact } from "@/lib/users/redact";
+import { users } from "@/lib/users/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const Body = z.object({
   message: z.string().trim().min(1).max(500),
-  session_id: z.string().max(64).optional(),
   context: z
     .object({
       last_intent: IntentSchema.nullable().optional(),
@@ -21,52 +24,44 @@ const Body = z.object({
     .optional(),
 });
 
-// Simple per-instance daily limits (no login in the MVP).
-const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_IP ?? 60);
-const hits = new Map<string, { day: string; n: number }>();
-function allowed(key: string) {
-  const day = new Date().toISOString().slice(0, 10);
-  const h = hits.get(key);
-  if (!h || h.day !== day) {
-    if (hits.size > 50_000) hits.clear();
-    hits.set(key, { day, n: 1 });
-    return true;
-  }
-  return ++h.n <= DAILY_LIMIT;
-}
-
 export async function POST(req: Request) {
   const t0 = Date.now();
   const parsedBody = Body.safeParse(await req.json().catch(() => null));
   if (!parsedBody.success) return NextResponse.json({ error: "bad request" }, { status: 400 });
-  const { message, session_id, context } = parsedBody.data;
+  const { message, context } = parsedBody.data;
 
-  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "local";
-  if (!allowed(ip) || (session_id && !allowed(`s:${session_id}`)))
-    return NextResponse.json({ error: "Daily question limit reached. Please come back tomorrow." }, { status: 429 });
+  // Who is asking, and what their plan allows (enforced here, not in the UI).
+  const viewer = await currentViewer();
+  if (!viewer) return NextResponse.json({ error: "signin_required" }, { status: 401 });
+  const { user, plan } = viewer;
+  const store = users();
+  if (!(await store.ipGuard(clientIp(req), "requests", REQUESTS_PER_IP_PER_DAY)))
+    return NextResponse.json({ error: "Too many requests from this network today." }, { status: 429 });
+  const quota = await store.consume(user.uid, "chat", plan.chatPerDay);
+  if (!quota.allowed)
+    return NextResponse.json(
+      { error: "limit_reached", message: `You've used all ${quota.limit} questions for today.`, plan: plan.id, usage: { used: quota.used, limit: quota.limit } },
+      { status: 429 },
+    );
 
   const ctx: ChatContext = { ...(context ?? {}), history: [...(context?.history ?? []), message].slice(-4) };
 
   try {
-    const store = await getStore();
+    const data = await getStore();
     const { intent, route } = await parse(message, ctx);
-    const result = await execute(intent, ctx);
-    // (the disclaimer + data date are shown once in the UI footer, not on every message)
-    const body: ChatResponse = { blocks: result.blocks, context: result.context, meta: { route, intent: intent.intent, as_of: store.asOf.nav } };
+    const result = await execute(intent, ctx, { maxRankRows: plan.chatRankRows, planId: plan.id });
+    const body: ChatResponse = {
+      blocks: result.blocks,
+      context: result.context,
+      meta: { route, intent: intent.intent, as_of: data.asOf.nav, plan: plan.id, usage: { used: quota.used, limit: quota.limit } },
+    };
 
-    // One structured log line per question -> Cloud Logging -> BigQuery sink (analytics).
-    console.log(
-      JSON.stringify({
-        type: "mf_event",
-        session_id: session_id ?? null,
-        question: message,
-        route,
-        intent,
-        funds_shown: result.context.last_results ?? [],
-        answered: route !== "fallback",
-        latency_ms: Date.now() - t0,
-      }),
-    );
+    const safeQuestion = redact(message);
+    const event = { kind: "chat", question: safeQuestion, intent: intent.intent, route, funds_shown: result.context.last_results ?? [] };
+    // History (not awaited: never slows the answer). Answers aren't stored; they can be regenerated from the data.
+    store.logEvent(user.uid, event).catch((e) => console.error(JSON.stringify({ type: "history_write_failed", error: String(e).slice(0, 200) })));
+    // Analytics: one structured log line per question -> Cloud Logging -> BigQuery sink.
+    console.log(JSON.stringify({ type: "mf_event", uid: user.uid, plan: plan.id, ...event, intent_json: intent, answered: route !== "fallback", latency_ms: Date.now() - t0 }));
     return NextResponse.json(body);
   } catch (e) {
     console.error(JSON.stringify({ type: "chat_error", error: String(e).slice(0, 500) }));

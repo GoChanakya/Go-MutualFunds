@@ -49,5 +49,5 @@ export type ChatContext = {
 export type ChatResponse = {
   blocks: Block[];
   context: ChatContext;
-  meta: { route: "rules" | "llm" | "fallback"; intent: string; as_of: string | null };
+  meta: { route: "rules" | "llm" | "fallback"; intent: string; as_of: string | null; plan: "free" | "pro"; usage: { used: number; limit: number } };
 };

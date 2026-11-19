@@ -122,7 +122,7 @@ async function resolveRef(ref: string, ctx: ChatContext): Promise<{ code?: strin
 
 // ---------------- rank_funds ----------------
 
-async function rankFunds(it: RankIntent, ctx: ChatContext): Promise<Result> {
+async function rankFunds(it: RankIntent, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
   let codes = it.groups;
   let defaultSet: "passive" | "equity" | null = null;
   if (!codes.length) {
@@ -131,7 +131,7 @@ async function rankFunds(it: RankIntent, ctx: ChatContext): Promise<Result> {
   }
   const groups = expandGroups(codes);
   const sortCol = SORT_SQL[it.sort_by](it.lens);
-  const limit = Math.min(it.limit, MAX_ROWS);
+  const limit = Math.min(it.limit, MAX_ROWS, exec.maxRankRows);
   const where = [
     `grp IN (${inList(groups)})`,
     it.passive === "passive" ? `active_passive = 'Passive'` : it.passive === "active" || defaultSet === "equity" ? `active_passive = 'Active'` : "TRUE",
@@ -154,6 +154,8 @@ async function rankFunds(it: RankIntent, ctx: ChatContext): Promise<Result> {
 
   // Analysis from our own rules: why #1 leads, standouts, trade-offs, category context.
   blocks.push(...(await rankInsights(rows, funds, groups)));
+  if (exec.planId === "free" && it.limit > rows.length && total > rows.length)
+    blocks.push({ type: "note", text: `Free plan shows the top ${rows.length}. Upgrade to see up to ${MAX_ROWS} funds per list and every data point.` });
 
   const kinds = new Set(groups.map((g) => GROUP_BY_CODE.get(g)?.kind));
   if (kinds.has("sector"))
@@ -498,10 +500,12 @@ const OOS: Record<string, string> = {
 
 const HELP_OPTIONS = ["Best small cap funds", "Best passive funds", "Best technology funds", "Compare Parag Parikh Flexi Cap and HDFC Flexi Cap", "What is your 5-pillar score?", "Where are fund managers moving money?"];
 
-export async function execute(intent: Intent, ctx: ChatContext): Promise<Result> {
+export type ExecOptions = { maxRankRows: number; planId: "free" | "pro" };
+
+export async function execute(intent: Intent, ctx: ChatContext, opts: ExecOptions = { maxRankRows: MAX_ROWS, planId: "pro" }): Promise<Result> {
   switch (intent.intent) {
     case "rank_funds":
-      return rankFunds(intent, ctx);
+      return rankFunds(intent, ctx, opts);
     case "fund_profile":
       return fundProfile(intent.fund, ctx);
     case "fund_metric":
