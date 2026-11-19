@@ -1,0 +1,525 @@
+import "server-only";
+import { DEFAULT_EQUITY_GROUPS, DEFAULT_PASSIVE_GROUPS, GROUP_BY_CODE, THEME_SECTOR_PATTERNS, expandGroups, groupName } from "@/lib/config/groups";
+import { METRICS } from "@/lib/config/metrics";
+import { LENS_LABEL, LENS_WEIGHTS, MAX_ROWS, MIN_AGE_YEARS, PILLARS, PILLAR_LABEL, PILLAR_SOURCE, type Lens, type Pillar } from "@/lib/config/score";
+import { resolveOne } from "@/lib/data/resolve";
+import { getStore, query } from "@/lib/data/store";
+import type { FundMetric, Intent, RankIntent } from "@/lib/intent/schema";
+import type { Block, ChatContext, Fact, FundRow, ShiftRow } from "@/lib/types";
+import { fmtCr, fmtInr, fmtMonths, fmtPct, fmtScore, fmtYears, num } from "./format";
+import { catStats, compareInsights, profileInsights, rankInsights, returnBars } from "./insights";
+
+// Executes a validated intent against our data and builds the answer blocks.
+// Every number and every sentence here comes from our code - never from the LLM.
+
+export type Result = { blocks: Block[]; context: ChatContext };
+
+type Row = Record<string, unknown>;
+
+const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+const CODE_RE = /^[0-9A-Za-z_-]{1,20}$/;
+const inList = (codes: string[]) => codes.filter((c) => CODE_RE.test(c)).map(q).join(", ") || "''";
+
+const scoreCol = (lens: Lens) => `score_${lens}`;
+
+const SORT_SQL: Record<RankIntent["sort_by"], (lens: Lens) => string> = {
+  score: (l) => scoreCol(l),
+  resilience: () => "p_resilience",
+  consistency: () => "p_consistency",
+  momentum: () => "p_momentum",
+  returns: () => "p_returns",
+  track_record: () => "p_track_record",
+  ret_1y: () => "ret_1y_pct",
+  ret_3m: () => "ret_3m_pct",
+  aum: () => "aum_lakhs",
+  age: () => "fund_age_years",
+};
+
+const SORT_LABEL: Record<RankIntent["sort_by"], string> = {
+  score: "our 5-pillar score",
+  ...(Object.fromEntries(PILLARS.map((p) => [p, PILLAR_LABEL[p]])) as Record<Pillar, string>),
+  ret_1y: "1-year return",
+  ret_3m: "3-month return",
+  aum: "fund size (AUM)",
+  age: "fund age",
+};
+
+function toFundRow(r: Row, lens: Lens = "balanced"): FundRow {
+  return {
+    code: String(r.scheme_code),
+    name: String(r.name),
+    group: groupName(String(r.grp)),
+    score: num(r[scoreCol(lens)]),
+    pillars: {
+      resilience: num(r.p_resilience),
+      consistency: num(r.p_consistency),
+      momentum: num(r.p_momentum),
+      returns: num(r.p_returns),
+      track_record: num(r.p_track_record),
+    },
+    ret_1y: num(r.ret_1y_pct),
+    aum_cr: num(r.aum_lakhs) === null ? null : Math.round(Number(r.aum_lakhs) / 100),
+    age_years: num(r.fund_age_years),
+  };
+}
+
+const pillarsOf = (f: FundRow) => PILLARS.map((p) => [p, f.pillars[p]] as const);
+const strongPillars = (f: FundRow, min = 75) => pillarsOf(f).filter(([, v]) => v !== null && v >= min).map(([p]) => p);
+const weakPillars = (f: FundRow, max = 30) => pillarsOf(f).filter(([, v]) => v !== null && v <= max).map(([p]) => p);
+const listJoin = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+// One sentence per pillar, with the real number behind it.
+function pillarEvidence(p: Pillar, r: Row): string {
+  switch (p) {
+    case "resilience":
+      if (num(r.resilience_score) !== null)
+        return `has a resilience score of ${Math.round(Number(r.resilience_score))}/100 in our stress tests${
+          num(r.resilience_worst_fall_pct) !== null ? ` (worst fall ${Math.abs(Number(r.resilience_worst_fall_pct)).toFixed(1)}%)` : ""
+        }`;
+      return num(r.typical_recovery_months) !== null
+        ? `typically recovers from falls in ${fmtMonths(r.typical_recovery_months)} (category: ${fmtMonths(r.category_typical_recovery_months)})`
+        : "holds up well in market falls";
+    case "consistency":
+      return num(r.batting_months) ? `beat its category average in ${r.months_beat} of the last ${r.batting_months} months` : "beats its category consistently";
+    case "momentum":
+      return num(r.rank_now) ? `ranks ${r.rank_now} of ${r.rank_total_now} in its category on recent performance` : "has strong recent momentum";
+    case "returns":
+      return `1-year return of ${fmtPct(r.ret_1y_pct)}`;
+    case "track_record":
+      return `${fmtCr(r.aum_lakhs)} in assets and ${fmtYears(r.fund_age_years)} of history`;
+  }
+}
+
+const SELECT_FUNDS = `SELECT * FROM universe`;
+
+async function fundsByCodes(codes: string[]): Promise<Row[]> {
+  if (!codes.length) return [];
+  const rows = await query<Row>(`${SELECT_FUNDS} WHERE scheme_code IN (${inList(codes)})`);
+  const byCode = new Map(rows.map((r) => [String(r.scheme_code), r]));
+  return codes.map((c) => byCode.get(c)).filter(Boolean) as Row[];
+}
+
+// "result:2" -> code from previous answer; otherwise fuzzy-resolve the name.
+async function resolveRef(ref: string, ctx: ChatContext): Promise<{ code?: string; candidates?: string[] }> {
+  const m = ref.match(/^result:(\d+)$/);
+  if (m) {
+    const code = ctx.last_results?.[Number(m[1]) - 1];
+    return code ? { code } : { candidates: [] };
+  }
+  // "group:EQS-LRG:2" = 2nd best fund in that category by the balanced score
+  const g = ref.match(/^group:([A-Z-]+):([1-9])$/);
+  if (g && GROUP_BY_CODE.has(g[1])) {
+    const [row] = await query<Row>(
+      `SELECT scheme_code FROM universe WHERE grp IN (${inList(expandGroups([g[1]]))}) AND eligible AND score_balanced IS NOT NULL
+       ORDER BY score_balanced DESC LIMIT 1 OFFSET ${Number(g[2]) - 1}`,
+    );
+    return row ? { code: String(row.scheme_code) } : { candidates: [] };
+  }
+  const r = await resolveOne(ref);
+  if (r.fund) return { code: r.fund.code };
+  return { candidates: r.candidates.map((c) => c.name) };
+}
+
+// ---------------- rank_funds ----------------
+
+async function rankFunds(it: RankIntent, ctx: ChatContext): Promise<Result> {
+  let codes = it.groups;
+  let defaultSet: "passive" | "equity" | null = null;
+  if (!codes.length) {
+    defaultSet = it.passive === "passive" ? "passive" : "equity";
+    codes = defaultSet === "passive" ? DEFAULT_PASSIVE_GROUPS : DEFAULT_EQUITY_GROUPS;
+  }
+  const groups = expandGroups(codes);
+  const sortCol = SORT_SQL[it.sort_by](it.lens);
+  const limit = Math.min(it.limit, MAX_ROWS);
+  const where = [
+    `grp IN (${inList(groups)})`,
+    it.passive === "passive" ? `active_passive = 'Passive'` : it.passive === "active" || defaultSet === "equity" ? `active_passive = 'Active'` : "TRUE",
+    it.min_age_years ? `fund_age_years >= ${Number(it.min_age_years)}` : "TRUE",
+  ].join(" AND ");
+
+  const rows = await query<Row>(`${SELECT_FUNDS} WHERE ${where} AND eligible AND ${sortCol} IS NOT NULL ORDER BY ${sortCol} DESC, aum_lakhs DESC NULLS LAST LIMIT ${limit}`);
+  const [{ total }] = await query<{ total: number }>(`SELECT count(*)::INT AS total FROM universe WHERE ${where}`);
+
+  const label =
+    defaultSet === "passive" ? "equity index funds & ETFs" : defaultSet === "equity" ? "diversified equity funds" : `${listJoin(codes.map(groupName))} funds`;
+  if (!rows.length)
+    return { blocks: [{ type: "text", text: `I don't have enough data to rank ${label} by ${SORT_LABEL[it.sort_by]} yet.` }], context: ctx };
+
+  const funds = rows.map((r) => toFundRow(r, it.lens));
+  const blocks: Block[] = [];
+  const how = it.sort_by === "score" ? `${SORT_LABEL.score} (${LENS_LABEL[it.lens]})` : SORT_LABEL[it.sort_by];
+  blocks.push({ type: "text", text: `Top ${funds.length} ${label}, ranked by ${how}.` });
+  blocks.push({ type: "fund_table", title: `${label} · ${how}`, rows: funds });
+
+  // Analysis from our own rules: why #1 leads, standouts, trade-offs, category context.
+  blocks.push(...(await rankInsights(rows, funds, groups)));
+
+  const kinds = new Set(groups.map((g) => GROUP_BY_CODE.get(g)?.kind));
+  if (kinds.has("sector"))
+    blocks.push({ type: "note", text: "Sector and thematic funds are concentrated bets. They can swing much more than diversified funds." });
+  if (groups.includes("EQS-SMC") || groups.includes("EQS-MID"))
+    blocks.push({ type: "note", text: `${groups.includes("EQS-SMC") ? "Small" : "Mid"} cap funds can fall 30-40% in a crash. They suit money you won't need for 7+ years.` });
+  if (kinds.has("passive") || it.passive === "passive")
+    blocks.push({ type: "note", text: "For index funds and ETFs, low cost and low tracking error matter most. Scores here compare them only within their own group." });
+  if (defaultSet === "passive") blocks.push({ type: "note", text: "Showing equity index funds and ETFs. Ask for gold, debt or international passive funds separately." });
+  if (defaultSet === "equity")
+    blocks.push({ type: "note", text: "Showing diversified equity funds across categories (large, mid, small, flexi cap and more). Name a category for a like-for-like list." });
+  const [{ unscored }] = await query<{ unscored: number }>(`SELECT count(*)::INT AS unscored FROM universe WHERE ${where} AND NOT eligible`);
+  if (unscored)
+    blocks.push({ type: "note", text: `${unscored} of ${total} funds here are not ranked because they have under ${MIN_AGE_YEARS} years of history or too little data.` });
+
+  const opts = ["Compare the top 2", "Tell me more about the first one"];
+  if (it.sort_by !== "resilience") opts.push("Sort by resilience");
+  if (it.lens !== "safety") opts.push("Show the safest ones");
+  const theme = codes.find((c) => THEME_SECTOR_PATTERNS[c]);
+  if (theme) opts.push(`Sector shifts in ${groupName(theme)}`);
+  blocks.push({ type: "choices", text: "", options: opts });
+
+  return { blocks, context: { ...ctx, last_intent: it, last_results: funds.map((f) => f.code) } };
+}
+
+// ---------------- fund_profile ----------------
+
+async function fundProfile(ref: string, ctx: ChatContext): Promise<Result> {
+  const r = await resolveRef(ref, ctx);
+  if (!r.code) return notFound(r.candidates, ctx);
+  const [row] = await fundsByCodes([r.code]);
+  if (!row) return notFound([], ctx);
+  const fund = toFundRow(row);
+  const [cat] = await query<Row>(`SELECT median(ret_1y_pct) AS med_1y FROM universe WHERE grp = ${q(String(row.grp))}`);
+
+  const facts: Fact[] = [
+    { label: "1-year return", value: fmtPct(row.ret_1y_pct), hint: `category median ${fmtPct(cat?.med_1y)}` },
+    { label: "Consistency", value: num(row.batting_months) ? `beat category ${row.months_beat} of ${row.batting_months} months` : "-" },
+    {
+      label: "Momentum",
+      value: num(row.rank_now) ? `rank ${row.rank_now} of ${row.rank_total_now}` : "-",
+      hint: num(row.places_climbed_6m) ? `${Number(row.places_climbed_6m) >= 0 ? "climbed" : "slipped"} ${Math.abs(Number(row.places_climbed_6m))} place${Math.abs(Number(row.places_climbed_6m)) === 1 ? "" : "s"} in 6 months` : undefined,
+    },
+    { label: "Typical recovery after falls", value: fmtMonths(row.typical_recovery_months), hint: `category ${fmtMonths(row.category_typical_recovery_months)}` },
+    { label: "Fund size", value: fmtCr(row.aum_lakhs) },
+    { label: "Fund age", value: fmtYears(row.fund_age_years) },
+  ];
+  const more: Fact[] = [
+    {
+      label: "Covid 2020 crash",
+      value: num(row.covid_2020_fall_pct) !== null ? `fell ${Number(row.covid_2020_fall_pct).toFixed(1)}%` : "-",
+      hint: num(row.covid_2020_recovery_months) !== null ? `recovered in ${fmtMonths(row.covid_2020_recovery_months)}` : undefined,
+    },
+    { label: "₹5,000/month SIP for 3 years", value: num(row.sip_value) ? `${fmtInr(row.sip_invested)} → ${fmtInr(row.sip_value)}` : "-" },
+    { label: "3-month / 6-month return", value: `${fmtPct(row.ret_3m_pct)} / ${fmtPct(row.ret_6m_pct)}` },
+    { label: "Type", value: `${String(row.active_passive ?? "-")} · ${row.n_peers} funds in category` },
+    { label: "NAV", value: num(row.nav) !== null ? `₹${Number(row.nav).toFixed(2)}` : "-", hint: row.nav_date ? `as of ${row.nav_date}` : undefined },
+  ];
+
+  const strengths = strongPillars(fund, 70).map((p) => `${PILLAR_LABEL[p]}: ${pillarEvidence(p, row)}`);
+  const watch = weakPillars(fund, 30).map((p) => `${PILLAR_LABEL[p]}: ${pillarEvidence(p, row)}`);
+  if ((num(row.places_climbed_6m) ?? 0) <= -5) watch.push(`Momentum slipping: down ${Math.abs(Number(row.places_climbed_6m))} places in its category over 6 months`);
+  if ((fund.age_years ?? 99) < 3) watch.push("Young fund: less than 3 years of history, so scores are less reliable");
+
+  const [leader] = await query<Row>(
+    `SELECT name FROM universe WHERE grp = ${q(String(row.grp))} AND scheme_code <> ${q(fund.code)} AND score_balanced IS NOT NULL ORDER BY score_balanced DESC LIMIT 1`,
+  );
+  const opts = [`Best ${groupName(String(row.grp))} funds`];
+  if (leader) opts.push(`Compare ${fund.name} vs ${leader.name}`);
+  opts.push("What is resilience?");
+  const ins = await profileInsights(row, fund);
+  const blocks: Block[] = [
+    ...(ins.verdict ? [ins.verdict] : []),
+    { type: "fund_card", fund, facts, more, strengths: [], watch },
+    ...ins.analysis,
+    ...ins.peers,
+    { type: "choices", text: "", options: opts },
+  ];
+  return { blocks, context: { ...ctx, last_intent: { intent: "fund_profile", fund: "result:1" }, last_results: [fund.code] } };
+}
+
+// ---------------- fund_metric ----------------
+
+const standing = (p: number | null) =>
+  p === null
+    ? null
+    : p >= 75
+      ? "among the strongest in its category"
+      : p >= 50
+        ? "above the middle of its category"
+        : p >= 25
+          ? "below the middle of its category"
+          : "among the weakest in its category";
+
+const METRIC_LABEL: Record<FundMetric, string> = {
+  score: "overall score",
+  consistency: "consistency",
+  returns: "returns",
+  ret_3m: "3-month return",
+  ret_6m: "6-month return",
+  ret_1y: "1-year return",
+  sip: "SIP returns",
+  resilience: "resilience",
+  momentum: "momentum",
+  aum: "fund size",
+  age: "fund age",
+  nav: "NAV",
+};
+
+// metric -> rank_funds sort key for the "best funds by this" suggestion
+const METRIC_SORT: Partial<Record<FundMetric, RankIntent["sort_by"]>> = {
+  score: "score",
+  consistency: "consistency",
+  returns: "returns",
+  ret_1y: "ret_1y",
+  ret_3m: "ret_3m",
+  resilience: "resilience",
+  momentum: "momentum",
+  aum: "aum",
+};
+
+async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext): Promise<Result> {
+  const r = await resolveRef(ref, ctx);
+  if (!r.code) return notFound(r.candidates, ctx);
+  const [row] = await fundsByCodes([r.code]);
+  if (!row) return notFound([], ctx);
+  const f = toFundRow(row);
+  const cat = groupName(String(row.grp));
+  const [m] = await query<Row>(`
+    SELECT median(ret_3m_pct) AS r3, median(ret_6m_pct) AS r6, median(ret_1y_pct) AS r1, median(months_beat) AS beat,
+           median(sip_3y_gain_pct) AS sip, median(typical_recovery_months) AS rec
+    FROM universe WHERE grp = ${q(String(row.grp))}`);
+  const name = `**${f.name}**`;
+  const vs = (v: unknown, med: unknown) => `${fmtPct(v)} (${cat} median ${fmtPct(med)})`;
+  let text = "";
+  let facts: Fact[] = [];
+
+  switch (metric) {
+    case "consistency": {
+      if (!num(row.batting_months)) {
+        text = `I don't have a batting average for ${name} yet.`;
+        break;
+      }
+      const beat = Number(row.months_beat);
+      const med = num(m?.beat);
+      const verdict =
+        med === null ? "" : beat >= med + 2 ? " That's better than most of its peers." : beat <= med - 2 ? " That's weaker than most of its peers." : " That's about average for its category.";
+      text = `${name} beat its category average in **${beat} of the last ${row.batting_months} months**${med !== null ? ` (${cat} median: ${Math.round(med)} of 12)` : ""}.${verdict}`;
+      facts = [
+        { label: "Months beating category", value: `${beat} of ${row.batting_months}` },
+        { label: `${cat} median`, value: med !== null ? `${Math.round(med)} of 12` : "-" },
+        { label: "Consistency pillar", value: `${fmtScore(f.pillars.consistency)}/100`, hint: "percentile vs category" },
+      ];
+      break;
+    }
+    case "ret_3m":
+    case "ret_6m":
+    case "ret_1y":
+    case "returns": {
+      const col = { ret_3m: ["ret_3m_pct", "r3", "3 months"], ret_6m: ["ret_6m_pct", "r6", "6 months"], ret_1y: ["ret_1y_pct", "r1", "1 year"], returns: ["ret_1y_pct", "r1", "1 year"] }[metric];
+      text = `${name} returned **${fmtPct(row[col[0]])}** over ${col[2]}, against a ${cat} median of ${fmtPct(m?.[col[1]])}.`;
+      if (metric === "returns" && standing(f.pillars.returns)) text += ` On returns it is ${standing(f.pillars.returns)}.`;
+      facts = [
+        { label: "3 months", value: fmtPct(row.ret_3m_pct), hint: `median ${fmtPct(m?.r3)}` },
+        { label: "6 months", value: fmtPct(row.ret_6m_pct), hint: `median ${fmtPct(m?.r6)}` },
+        { label: "1 year", value: fmtPct(row.ret_1y_pct), hint: `median ${fmtPct(m?.r1)}` },
+      ];
+      if (num(row.sip_value)) facts.push({ label: "₹5,000/month SIP, 3 yrs", value: fmtInr(row.sip_value), hint: `invested ${fmtInr(row.sip_invested)}` });
+      break;
+    }
+    case "sip":
+      text = num(row.sip_value)
+        ? `A ₹5,000 monthly SIP in ${name} for the last 3 years: invested **${fmtInr(row.sip_invested)}**, now worth **${fmtInr(row.sip_value)}** (${vs(row.sip_3y_gain_pct, m?.sip)}).`
+        : `${name} doesn't have 3 years of SIP history yet.`;
+      break;
+    case "resilience":
+      text = `${name} is ${standing(f.pillars.resilience) ?? "not yet rated"} on resilience${f.pillars.resilience !== null ? ` (${fmtScore(f.pillars.resilience)}/100)` : ""}.`;
+      facts = [
+        { label: "Typical recovery after falls", value: fmtMonths(row.typical_recovery_months), hint: `${cat} median ${fmtMonths(m?.rec)}` },
+        { label: "Covid 2020 crash", value: num(row.covid_2020_fall_pct) !== null ? `fell ${Number(row.covid_2020_fall_pct).toFixed(1)}%` : "-", hint: num(row.covid_2020_recovery_months) !== null ? `recovered in ${fmtMonths(row.covid_2020_recovery_months)}` : undefined },
+        { label: "Worst fall (stress tests)", value: num(row.resilience_worst_fall_pct) !== null ? `${Math.abs(Number(row.resilience_worst_fall_pct)).toFixed(1)}%` : "-" },
+      ];
+      break;
+    case "momentum":
+      text = num(row.rank_now)
+        ? `${name} ranks **${row.rank_now} of ${row.rank_total_now}** in ${cat} on recent (6-month) performance${
+            num(row.places_climbed_6m) ? `, ${Number(row.places_climbed_6m) >= 0 ? "up" : "down"} ${Math.abs(Number(row.places_climbed_6m))} places over 6 months` : ""
+          }.`
+        : `I don't have a momentum rank for ${name}.`;
+      break;
+    case "aum":
+      text = `${name} manages **${fmtCr(row.aum_lakhs)}**.`;
+      break;
+    case "age":
+      text = `${name} has **${fmtYears(row.fund_age_years)}** of history.`;
+      break;
+    case "nav":
+      text = `${name}'s NAV is **₹${Number(row.nav).toFixed(2)}** (as of ${row.nav_date}).`;
+      break;
+    case "score": {
+      const ps = PILLARS.filter((p) => f.pillars[p] !== null).sort((a, b) => (f.pillars[b] ?? 0) - (f.pillars[a] ?? 0));
+      text =
+        f.score === null
+          ? `${name} isn't scored yet (it needs ${MIN_AGE_YEARS}+ years of history).`
+          : `${name} scores **${fmtScore(f.score)}/100** against ${row.n_peers} ${cat} funds. Strongest: ${PILLAR_LABEL[ps[0]].toLowerCase()} (${fmtScore(f.pillars[ps[0]])}). Weakest: ${PILLAR_LABEL[ps[ps.length - 1]].toLowerCase()} (${fmtScore(f.pillars[ps[ps.length - 1]])}).`;
+      facts = PILLARS.map((p) => ({ label: PILLAR_LABEL[p], value: fmtScore(f.pillars[p]), hint: standing(f.pillars[p]) ?? undefined }));
+      break;
+    }
+  }
+
+  const blocks: Block[] = [{ type: "text", text }];
+  if (metric === "returns" || metric.startsWith("ret_")) {
+    // returns: a small chart vs the category median, then the SIP line
+    const bars = returnBars(row, await catStats([String(row.grp)]));
+    if (bars) blocks.push(bars);
+    facts = facts.filter((x) => x.label.includes("SIP"));
+  }
+  if (facts.length) blocks.push({ type: "facts", facts });
+  const opts = [`Full profile of ${f.name}`];
+  const sort = METRIC_SORT[metric];
+  if (sort) opts.push(`Best ${cat} funds by ${METRIC_LABEL[metric]}`);
+  else opts.push(`Best ${cat} funds`);
+  if (metric !== "returns") opts.push("What are its returns?");
+  blocks.push({ type: "choices", text: "", options: opts });
+  return { blocks, context: { ...ctx, last_intent: { intent: "fund_metric", fund: "result:1", metric }, last_results: [f.code] } };
+}
+
+function notFound(candidates: string[] | undefined, ctx: ChatContext): Result {
+  if (candidates?.length) return { blocks: [{ type: "choices", text: "Which fund do you mean?", options: candidates.slice(0, 4) }], context: ctx };
+  return { blocks: [{ type: "text", text: "I couldn't find that fund. Try its full name, for example \"Parag Parikh Flexi Cap\"." }], context: ctx };
+}
+
+// ---------------- compare ----------------
+
+async function compare(refs: string[], ctx: ChatContext): Promise<Result> {
+  // "compare it with the category leader"
+  const codes: string[] = [];
+  for (const ref of refs) {
+    const r = await resolveRef(ref, ctx);
+    if (!r.code) return notFound(r.candidates, ctx);
+    if (!codes.includes(r.code)) codes.push(r.code);
+  }
+  if (codes.length < 2) return { blocks: [{ type: "text", text: "Tell me at least two different funds to compare." }], context: ctx };
+  const rows = await fundsByCodes(codes);
+  const funds = rows.map((r) => toFundRow(r));
+
+  type Spec = { label: string; get: (r: Row, f: FundRow) => number | null; fmt: (v: number | null) => string; better: "high" | "low" | null };
+  const specs: Spec[] = [
+    { label: "Overall score", get: (_, f) => f.score, fmt: fmtScore, better: "high" },
+    ...PILLARS.map((p): Spec => ({ label: PILLAR_LABEL[p], get: (_, f) => f.pillars[p], fmt: fmtScore, better: "high" })),
+    { label: "1-year return", get: (r) => num(r.ret_1y_pct), fmt: (v) => fmtPct(v), better: "high" },
+    { label: "Months beating category", get: (r) => (num(r.batting_months) ? Number(r.months_beat) : null), fmt: (v) => (v === null ? "-" : `${v} of 12`), better: "high" },
+    { label: "Typical recovery", get: (r) => num(r.typical_recovery_months), fmt: fmtMonths, better: "low" },
+    { label: "Covid 2020 fall", get: (r) => num(r.covid_2020_fall_pct), fmt: (v) => (v === null ? "-" : `${v.toFixed(1)}%`), better: "low" },
+    { label: "Fund size", get: (r) => num(r.aum_lakhs), fmt: fmtCr, better: null },
+    { label: "Fund age", get: (r) => num(r.fund_age_years), fmt: fmtYears, better: null },
+  ];
+  const table = specs.map((s) => {
+    const vals = rows.map((r, i) => s.get(r, funds[i]));
+    let best: number | undefined;
+    if (s.better && vals.filter((v) => v !== null).length >= 2) {
+      const pick = s.better === "high" ? Math.max(...(vals.filter((v) => v !== null) as number[])) : Math.min(...(vals.filter((v) => v !== null) as number[]));
+      best = vals.filter((v) => v === pick).length === 1 ? vals.indexOf(pick) : undefined; // no highlight on ties
+    }
+    return { label: s.label, values: vals.map(s.fmt), best };
+  });
+
+  const blocks: Block[] = [{ type: "compare", funds, rows: table }, ...(await compareInsights(rows, funds))];
+  if (new Set(rows.map((r) => r.grp)).size > 1)
+    blocks.push({ type: "note", text: "These funds are in different categories. Pillar scores compare each fund with its own category, so compare them with care." });
+  return {
+    blocks,
+    context: { ...ctx, last_intent: { intent: "compare", funds: codes.map((_, i) => `result:${i + 1}`) }, last_results: codes },
+  };
+}
+
+// ---------------- explain_metric ----------------
+
+function explain(key: string, ctx: ChatContext): Result {
+  const m = METRICS.find((x) => x.key === key) ?? METRICS.find((x) => x.syn.some((s) => key.toLowerCase().includes(s)));
+  if (!m) return { blocks: [{ type: "text", text: "I can explain: " + METRICS.map((x) => x.name).join(", ") + "." }], context: ctx };
+  const blocks: Block[] = [
+    { type: "text", text: `**${m.name}.** ${m.what}` },
+    { type: "text", text: `**Why it matters:** ${m.why}` },
+    { type: "note", text: `Limits: ${m.limits}` },
+  ];
+  if (m.key === "score") {
+    const w = LENS_WEIGHTS.balanced;
+    blocks.splice(1, 0, { type: "text", text: PILLARS.map((p) => `• **${PILLAR_LABEL[p]}** (${w[p]}%): ${PILLAR_SOURCE[p]}`).join("\n") });
+  }
+  blocks.push({ type: "choices", text: "", options: ["Best flexi cap funds", "Most resilient small cap funds", "What is consistency?"] });
+  return { blocks, context: { ...ctx, last_intent: { intent: "explain_metric", metric: m.key } } };
+}
+
+// ---------------- sector_shifts ----------------
+
+async function sectorShifts(theme: string | undefined, ctx: ChatContext): Promise<Result> {
+  const store = await getStore();
+  const rows = await query<Row>(`
+    WITH s AS (
+      SELECT skey, sum(mv) AS mv, sum(prev_mv) AS pmv,
+        count(*) FILTER (WHERE action IN ('increased', 'new'))::INT AS add_n,
+        count(*) FILTER (WHERE action IN ('decreased', 'exited'))::INT AS cut_n
+      FROM sector_clean WHERE active_passive = 'Active' AND grp LIKE 'EQS%' GROUP BY skey),
+    t AS (SELECT sum(mv) AS tm, sum(pmv) AS tp FROM s)
+    SELECT n.label AS sector, 100 * s.mv / t.tm AS share_now, 100 * (s.mv / t.tm - s.pmv / t.tp) AS change_pp, add_n, cut_n
+    FROM s CROSS JOIN t JOIN sector_names n USING (skey)
+    WHERE s.mv / t.tm > 0.003 OR s.pmv / t.tp > 0.003
+    ORDER BY change_pp DESC`);
+  let all: ShiftRow[] = rows.map((r) => ({
+    sector: String(r.sector),
+    share_now: Number(Number(r.share_now).toFixed(2)),
+    change_pp: Number(Number(r.change_pp).toFixed(2)),
+    funds_adding: Number(r.add_n),
+    funds_cutting: Number(r.cut_n),
+  }));
+  const pattern = theme ? THEME_SECTOR_PATTERNS[theme] : undefined;
+  if (pattern) all = all.filter((r) => pattern.test(r.sector));
+  const up = all.filter((r) => r.change_pp > 0).slice(0, pattern ? 8 : 6);
+  const down = all.filter((r) => r.change_pp < 0).reverse().slice(0, pattern ? 8 : 6);
+  const period = `${store.asOf.sectorBase ?? "previous"} → ${store.asOf.sectorPeriod ?? "latest"}`;
+  const title = pattern ? `Where active equity funds moved money in ${groupName(theme!)}` : "Where active equity funds moved money";
+
+  const blocks: Block[] = [
+    { type: "text", text: `${title} (${period}), as a share of all active equity fund holdings.` },
+    { type: "sector_shifts", title, period, up, down },
+  ];
+  if (up[0]) blocks.push({ type: "text", text: `Biggest increase: ${up[0].sector} (${fmtPct(up[0].change_pp, 2).replace("%", " pts")}). Biggest cut: ${down[0]?.sector ?? "-"}.` });
+  blocks.push({ type: "note", text: "Weight changes include price moves as well as buying and selling. Portfolio disclosures lag the market." });
+  blocks.push({ type: "choices", text: "", options: theme ? [`Best ${groupName(theme)} funds`] : ["Best technology funds", "Best banking funds", "Best infrastructure funds"] });
+  return { blocks, context: { ...ctx, last_intent: { intent: "sector_shifts", ...(theme ? { theme } : {}) } } };
+}
+
+// ---------------- simple intents ----------------
+
+const OOS: Record<string, string> = {
+  advice: "I can't tell you to buy or sell a specific fund, because that would be personal investment advice. I can show you how funds score on our data, compare them, and explain what each number means.",
+  prediction: "I don't predict markets or future returns. I can show how funds have behaved in past falls and recoveries, which says a lot about the ride to expect.",
+  news: "I don't cover market news yet. I can show how a category has performed and where fund managers have been moving money.",
+  non_mf: "I only cover Indian mutual funds.",
+};
+
+const HELP_OPTIONS = ["Best small cap funds", "Best passive funds", "Best technology funds", "Compare Parag Parikh Flexi Cap and HDFC Flexi Cap", "What is your 5-pillar score?", "Where are fund managers moving money?"];
+
+export async function execute(intent: Intent, ctx: ChatContext): Promise<Result> {
+  switch (intent.intent) {
+    case "rank_funds":
+      return rankFunds(intent, ctx);
+    case "fund_profile":
+      return fundProfile(intent.fund, ctx);
+    case "fund_metric":
+      return fundMetric(intent.fund, intent.metric, ctx);
+    case "compare":
+      return compare(intent.funds, ctx);
+    case "explain_metric":
+      return explain(intent.metric, ctx);
+    case "sector_shifts":
+      return sectorShifts(intent.theme, ctx);
+    case "clarify":
+      return { blocks: [{ type: "choices", text: intent.question, options: intent.options }], context: ctx };
+    case "out_of_scope":
+      return { blocks: [{ type: "text", text: OOS[intent.reason] }, { type: "choices", text: "", options: HELP_OPTIONS.slice(0, 3) }], context: ctx };
+    case "help":
+      return {
+        blocks: [{ type: "choices", text: "I can rank funds by our 5-pillar score, show any fund's details, compare funds, explain our metrics and show sector shifts. Try:", options: HELP_OPTIONS }],
+        context: ctx,
+      };
+  }
+}

@@ -1,0 +1,136 @@
+GoChanakya MF Intelligence — Proposal (Lean Version)
+Oct 2026 · @GoChanakya
+
+SUMMARY
+We will build an AI fund analyst that answers mutual fund questions from GoChanakya's own data, with real reasoning, at very low cost. The dataset, formulas and rules stay inside our GCP project. The AI model only ever sees the user's question and a few short labels, never the data.
+
+The design is deliberately small: one service, one cheap model, no new databases. It can grow into the larger plan later (advisor tools, partner API, ordering) once there is usage.
+
+
+1. WHAT WE ARE BUILDING
+- A chatbot that answers any mutual fund question: explain a metric, find funds, deep-dive one fund, compare funds, show a fund's history.
+- Every number comes from our own backend data. Every interpretation comes from our own metric guide, not the open internet.
+- Answers are structured (headline, key figures, table, short explanation, caution) and shown by our own UI, not a wall of chat text.
+- Answers are framed as screening and education, never "you should buy". Every answer ends with "AI-generated · data as of <date> · not investment advice".
+
+
+2. HOW IT WORKS (simple example)
+Question: "Is Parag Parikh Flexi Cap good for the long term?"
+
+  1. Our code matches the name to the exact scheme code.
+  2. The AI reads the question and decides which tools to call (e.g. fund_profile, compare_funds).
+  3. Our code runs the query on our data (DuckDB, in memory) and our rules turn numbers into labels:
+       {"verdicts": ["consistent_outperformer"], "vs_category": {"batting_avg": "top 10%"}}
+  4. The AI sees only those labels and writes: "It beats peers consistently, with a batting average of {{batting_avg}}."
+  5. Our code replaces {{batting_avg}} with the real value, and the app shows the answer.
+
+The AI never writes database queries and never types a number. It can only choose from a fixed list of tools, so it cannot invent data.
+
+
+3. DATA
+- Source of truth: backend_main_kartik/ in the mf-data-public bucket. It holds aum, batting_average, category, fund_cards, nse_schemes, rank_momentum, recovery_speed, returns, sip_3y and stress_events.
+- Gaps (e.g. daily NAV history) fall back to files in the mf-data-public root, such as nav_history.parquet.
+- The AI reads only these curated files. Older folders and CSVs in the bucket are not used.
+- One source per metric, so the same number is never defined twice.
+- Each metric carries its own "as of" date, shown in every answer.
+- The service loads the latest files from the bucket at start-up and refreshes daily. Access uses the Cloud Run service account; no keys.
+
+
+4. ARCHITECTURE (one service)
+
+  User app (GoWealthy)  ->  mf-brain (Cloud Run, asia-south1)  ->  Gemini Flash-Lite (Vertex AI, asia-south1)
+                                |
+                                +-- reads parquet data from mf-data-public into DuckDB (in memory)
+
+Inside mf-brain:
+- Scheme resolver: turns "parag parikh flexi" into an exact scheme code (rapidfuzz); asks "which one?" if unclear.
+- Semantic layer (YAML): the list of metrics and allowed filters. The AI fills a structured request; our code builds and checks the query.
+- Tools (initial set): query, fund_profile, compare_funds, explain_metric.
+- Insight engine: our own rules that turn numbers into labels such as "top 10%" or "fast recovery". This is our edge.
+- Privacy filter: a whitelist of what may be sent to the AI; blocks raw scores and formulas.
+- Placeholder filler and block builder: fill real numbers into the AI's text and package the answer for the UI.
+- Guards: login required, about 10 rows per answer, daily quota per user, a log of every request.
+
+Supporting services (already in use): Firebase Auth for login, Firestore for chat history.
+
+
+5. WHY THE ANSWERS STAY GOOD WITHOUT A BIG MODEL
+The quality comes from our design, not from an expensive model:
+- Fixed tools and a semantic layer, so the AI cannot make up data.
+- A good metric guide (metric_guide.yaml): meaning, unit, when to use it, its limits. This lets a small model sound knowledgeable.
+- Placeholders, so numbers are always correct.
+- A no-LLM fast path for simple lookups (e.g. "NAV of X"), which is instant and free.
+- Vague questions get a follow-up question instead of a guess.
+- At most 5 tool calls per question; only our listed tools.
+
+
+6. PRIVACY
+What stays inside our GCP project: the full dataset, formulas and methodology, insight rules, and full rankings. These are never sent to the AI.
+
+What the AI receives: the user's question, tool names, and about 5 short labels per question (for example "top 10%").
+
+Setup:
+- Gemini through Vertex AI with the region fixed to asia-south1 (never the global endpoint, never the free API key).
+- A service account with only the permission it needs; no API keys.
+- Vertex data caching disabled; request the exception from prompt logging for zero data retention. Vertex does not train on our data.
+- A privacy filter in code with unit tests, and an audit log of every outgoing request.
+- The bucket must be confirmed NOT publicly readable (the name contains "public"). Public access prevention and uniform bucket-level access to be enforced.
+- Anti-scraping: login on every call, row caps, daily quotas, and no raw full ranking tables in retail answers.
+
+Note: the data itself never leaves. Only small labels go to Google's model, in the Mumbai region, under Vertex's no-training terms. If a strict "no third-party processing" rule is ever required, the model adapter allows switching to a self-hosted model (Section 8).
+
+
+7. COST (planning estimates; confirm on the GCP pricing page)
+Model: Gemini Flash-Lite only, about Rs 0.2 per question. Simple questions use the free no-LLM path.
+
+  Questions per month   Approx. total cost per month
+  1,000                 Rs 0 - 1.5k
+  10,000                about Rs 3k
+  100,000               about Rs 30-45k
+
+Cost controls: no-LLM fast path, same-day answer cache, loading only the metric-guide entries a question needs, tool-call and output limits, daily user quotas, and GCP budget alerts. Cloud Run scales to zero, so there is no cost when nobody is asking.
+
+
+8. DECISIONS AND ALTERNATIVES CONSIDERED
+- Query approach: tools over a semantic layer, not classic RAG and not free text-to-SQL. This is more accurate and safer. RAG is kept only for text (blogs, SID/KIM) and is postponed.
+- Query engine: DuckDB in memory. BigQuery adds per-query cost; Postgres adds an always-on server.
+- Model: Gemini Flash-Lite only. A larger Flash tier can be added later for hard questions.
+- Self-hosted model (Ollama/vLLM on a GPU): not now. A GPU bills every running hour, costing 10-20 times more, and open models are weaker at multi-step reasoning. The code keeps the model behind a swappable adapter, so switching is one config change if a client or regulator requires it.
+- Frameworks such as LangChain, dbt MetricFlow and Cube: not needed. Plain Gemini function calling and a small YAML semantic layer are enough.
+- Stack: Python + FastAPI, Cloud Run, DuckDB, rapidfuzz, Firestore, Firebase Auth. Everything in asia-south1.
+
+
+9. COMPLIANCE
+- Firms remain fully responsible for AI-generated output (SEBI). We keep an audit log of every question, tool call, outgoing request and answer, and disclose that answers are AI-generated.
+- As a distributor, "which fund is best for me" is advice. Without an RIA licence, answers are framed as screening and education only, with a polite refusal for tips, guarantees and non-MF topics.
+- Wording and disclaimers to be reviewed by compliance before any public launch.
+
+
+10. BUILD PLAN
+Phase 1 (foundation)
+  1. Inspect the backend_main_kartik/ files: columns, sizes, refresh cadence. Pick one source per metric.
+  2. Write the semantic layer YAML and metric_guide.yaml (draft by us, corrections by GoChanakya).
+  3. Write the house view (GoChanakya's investing philosophy) so answers sound like us.
+Phase 2 (core service)
+  4. Build mf-brain: scheme resolver, 4 tools, insight engine, privacy filter, placeholder filler, guards.
+  5. Connect Gemini Flash-Lite through Vertex AI; add audit logging.
+  6. Write a test set of about 30-50 real questions with correct answers, and fix wrong results.
+Phase 3 (launch)
+  7. Deploy to Cloud Run, connect to GoWealthy with login and quotas; compliance review; limited release.
+Later (only if there is usage)
+  - nav_history, SIP what-if and category trends tools
+  - RAG over GoWiser blogs and SID/KIM
+  - Hard-question tier (Gemini Flash)
+  - Advisor mode with portfolio analysis (GoPortfolios), partner API/MCP
+  - Natural-language order placing (SIP/lumpsum) with confirm and OTP
+
+
+11. OPEN ITEMS BEFORE STARTING
+[ ] Confirm the current Gemini Flash-Lite price and which versions are available in asia-south1.
+[ ] Confirm the bucket is not publicly readable.
+[ ] Request the Vertex logging exception and disable data caching.
+[ ] Share the column lists of the latest backend_main_kartik/ parquet files.
+[ ] Decide which metrics may be shown as raw numbers and which only as labels.
+[ ] Set the retail free daily quota.
+[ ] Compliance guidance on disclaimer wording.
+[ ] Write the test question set with correct answers.
