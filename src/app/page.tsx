@@ -4,15 +4,27 @@ import { useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
 import { Header, Upgrade } from "@/components/Header";
 import { SignIn } from "@/components/SignIn";
+import { LogoMark } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { Block, ChatContext, ChatResponse } from "@/lib/types";
 
 type Msg = { role: "user"; text: string } | { role: "bot"; blocks: Block[] } | { role: "error"; text: string } | { role: "limit"; text: string };
 
-const STARTERS = ["Best small cap funds", "Best passive funds", "Compare Parag Parikh Flexi Cap vs HDFC Flexi Cap", "Where are fund managers moving money?"];
+const STARTERS: { title: string; sub: string; q: string }[] = [
+  { title: "Best small cap funds", sub: "Ranked by our 5-pillar score", q: "Best small cap funds" },
+  { title: "Compare two funds", sub: "Parag Parikh vs HDFC Flexi Cap", q: "Compare Parag Parikh Flexi Cap vs HDFC Flexi Cap" },
+  { title: "Funds that hold up in crashes", sub: "Most resilient flexi caps", q: "Most resilient flexi cap funds" },
+  { title: "Where is money moving?", sub: "Sector shifts in fund portfolios", q: "Where are fund managers moving money?" },
+];
 
-
-function Composer({ value, onChange, onSend, busy }: { value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean }) {
+function Composer({ value, onChange, onSend, busy, left }: { value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean; left: number | null }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [value]);
   return (
     <div className="composer-wrap">
       <form
@@ -22,13 +34,28 @@ function Composer({ value, onChange, onSend, busy }: { value: string; onChange: 
           onSend();
         }}
       >
-        <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Ask about any mutual fund" maxLength={500} autoFocus />
-        <button className="send" type="submit" disabled={busy || !value.trim()} aria-label="Send">
+        <textarea
+          ref={ref}
+          rows={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder="Ask about any mutual fund…"
+          maxLength={500}
+          autoFocus
+        />
+        <button className="send" type="submit" disabled={busy || !value.trim() || left === 0} aria-label="Send">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 19V5M5 12l7-7 7 7" />
           </svg>
         </button>
       </form>
+      {left !== null && left <= 3 && <div className="left-note">{left === 0 ? "No questions left today." : `${left} question${left === 1 ? "" : "s"} left today.`}</div>}
     </div>
   );
 }
@@ -46,7 +73,7 @@ export default function Home() {
     end.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, busy]);
 
-  // Arriving from the screener's "Ask about this fund": /?q=<question>
+  // Arriving from the screener ("Ask about this fund", "Compare"): /?q=<question>
   const asked = useRef(false);
   useEffect(() => {
     if (!me || asked.current) return;
@@ -91,11 +118,12 @@ export default function Home() {
 
   const disclaimer = (
     <div className="disclaimer">
-      Answers use GoChanakya data{asOf ? ` as of ${asOf}` : ""}. Not investment advice.
+      Answers use GoChanakya data{asOf ? ` as of ${asOf}` : ""}. For information only, not investment advice.
     </div>
   );
-
+  const left = me ? Math.max(0, me.limits.chat - me.used.chat) : null;
   const header = <Header me={me} onSignOut={signOut} />;
+
   if (me === undefined) return <div className="app">{header}</div>;
   if (me === null)
     return (
@@ -111,12 +139,15 @@ export default function Home() {
       <div className="app">
         {header}
         <div className="empty">
-          <h1>What can I help you find?</h1>
-          <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} />
-          <div className="starters">
+          <LogoMark size={44} />
+          <h1>Ask anything about mutual funds</h1>
+          <p className="lead">Rankings, fund deep-dives and comparisons from GoChanakya data: resilience, consistency, momentum, returns and track record.</p>
+          <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
+          <div className="starter-grid">
             {STARTERS.map((s) => (
-              <button key={s} className="pill" onClick={() => send(s)}>
-                {s}
+              <button key={s.q} className="starter" onClick={() => send(s.q)}>
+                <b>{s.title}</b>
+                <span>{s.sub}</span>
               </button>
             ))}
           </div>
@@ -137,32 +168,39 @@ export default function Home() {
               <div key={i} className="user">
                 {m.text}
               </div>
-            ) : m.role === "bot" ? (
-              <div key={i} className="bot">
-                {/* follow-up suggestions only under the latest answer */}
-                <Blocks blocks={m.blocks} onAsk={send} showFollowups={i === lastBot && !busy} />
-              </div>
-            ) : m.role === "limit" ? (
-              <div key={i} className="bot">
-                <Upgrade text={`${m.text} Come back tomorrow, or upgrade to Pro.`} />
-              </div>
             ) : (
-              <div key={i} className="bot error">
-                {m.text}
+              <div key={i} className="bot-row">
+                <LogoMark size={28} />
+                <div className={`bot${m.role === "error" ? " error" : ""}`}>
+                  {m.role === "bot" ? (
+                    // follow-up suggestions only under the latest answer
+                    <Blocks blocks={m.blocks} onAsk={send} showFollowups={i === lastBot && !busy} />
+                  ) : m.role === "limit" ? (
+                    <Upgrade text={`${m.text} Come back tomorrow, or upgrade to Pro.`} />
+                  ) : (
+                    m.text
+                  )}
+                </div>
               </div>
             ),
           )}
           {busy && (
-            <div className="dots" aria-label="Thinking">
-              <i />
-              <i />
-              <i />
+            <div className="bot-row">
+              <LogoMark size={28} />
+              <div className="thinking">
+                <span className="dots" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                Analysing fund data…
+              </div>
             </div>
           )}
           <div ref={end} />
         </div>
       </div>
-      <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} />
+      <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
       {disclaimer}
     </div>
   );

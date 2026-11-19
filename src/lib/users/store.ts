@@ -6,7 +6,7 @@ import { Firestore, FieldValue } from "@google-cloud/firestore";
 import { PLANS, type Plan, type PlanId } from "@/lib/config/plans";
 import { istDay, uidForPhone } from "./session";
 
-// User data lives in Firestore (Firebase project go-mf, asia-south1). Only this backend reads/writes it;
+// User data lives in Firestore (Firebase project go-mutualfunds, asia-south1). Only this backend reads/writes it;
 // Firestore security rules deny all client access. For local dev without Firestore, an in-memory store is used.
 //
 //   users/{uid}                    phone, plan, plan_expires_at, consent_at, created_at, last_seen_at, created_ip
@@ -38,7 +38,10 @@ export interface UserStore {
 }
 
 export function effectivePlan(u: UserDoc | null): Plan {
-  if (u?.plan === "pro" && (!u.plan_expires_at || Date.parse(u.plan_expires_at) > Date.now())) return PLANS.pro;
+  // tolerate hand edits in the Firebase console: "Pro", " pro ", or "pro" plus a stray newline
+  const plan = String(u?.plan ?? "").trim().toLowerCase();
+  const expires = u?.plan_expires_at ? Date.parse(String(u.plan_expires_at).trim()) : NaN;
+  if (plan === "pro" && (!u?.plan_expires_at || expires > Date.now())) return PLANS.pro;
   return PLANS.free;
 }
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJson } from "@/lib/http";
 import { REQUESTS_PER_IP_PER_DAY } from "@/lib/config/plans";
 import { getStore } from "@/lib/data/store";
 import { ScreenerFilters, runScreener } from "@/lib/engine/screener";
@@ -9,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const parsed = ScreenerFilters.safeParse(await req.json().catch(() => null));
+  const parsed = ScreenerFilters.safeParse(await readJson(req));
   if (!parsed.success) return NextResponse.json({ error: "bad filters" }, { status: 400 });
 
   const viewer = await currentViewer();

@@ -7,6 +7,20 @@ import type { Block, ChatContext } from "@/lib/types";
 
 // Each inner array is one conversation (follow-ups depend on earlier turns).
 const CONVERSATIONS: string[][] = [
+  // new question types (Nov): portfolio, sector exposure, alternatives, data we don't have
+  [
+    "parag parikh flexi cap sector allocation",
+    "where does hdfc flexi cap invest",
+    "funds with most IT exposure",
+    "which funds invest heavily in banks",
+    "alternatives to hdfc small cap",
+    "Tell me about HDFC Small Cap Fund",
+    "show me something better than this",
+    "expense ratio of hdfc flexi cap",
+    "who is the fund manager of parag parikh flexi cap",
+    "5 year cagr of sbi small cap",
+    "credit rating of hdfc corporate bond fund",
+  ],
   // user's real session #2 (2 Nov): fund names containing category words; compare by category
   [
     "best small cap fund?",

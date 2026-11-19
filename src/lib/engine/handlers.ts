@@ -263,6 +263,7 @@ const METRIC_LABEL: Record<FundMetric, string> = {
   aum: "fund size",
   age: "fund age",
   nav: "NAV",
+  allocation: "sector allocation",
 };
 
 // metric -> rank_funds sort key for the "best funds by this" suggestion
@@ -277,7 +278,7 @@ const METRIC_SORT: Partial<Record<FundMetric, RankIntent["sort_by"]>> = {
   aum: "aum",
 };
 
-async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext): Promise<Result> {
+async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
   const r = await resolveRef(ref, ctx);
   if (!r.code) return notFound(r.candidates, ctx);
   const [row] = await fundsByCodes([r.code]);
@@ -294,6 +295,54 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext): Pr
   let facts: Fact[] = [];
 
   switch (metric) {
+    case "allocation": {
+      const alloc = await query<Row>(
+        `SELECT dimension, label, pct, delta_pct, period, base_period FROM alloc WHERE scheme_code = ${q(f.code)} AND pct > 0 ORDER BY pct DESC`,
+      );
+      if (!alloc.length) {
+        text = `${name} has no portfolio disclosure in our data yet.`;
+        break;
+      }
+      const sectors = alloc.filter((a) => a.dimension === "sector");
+      const free = exec.planId === "free";
+      const shown = sectors.slice(0, free ? 3 : 10);
+      const period = alloc[0].base_period && alloc[0].period ? ` (${alloc[0].base_period} → ${alloc[0].period})` : "";
+      const fmtA = (a: Row) =>
+        `${Number(a.pct).toFixed(1)}%${Math.abs(num(a.delta_pct) ?? 0) >= 0.05 ? ` · ${Number(a.delta_pct) > 0 ? "+" : ""}${Number(a.delta_pct).toFixed(1)} pts` : ""}`;
+      // Some AMCs report holdings without sector names (only stock codes), which we can't classify.
+      const coverage = (dim: string) => alloc.filter((a) => a.dimension === dim).reduce((s2, a) => s2 + Number(a.pct), 0);
+      if (sectors.length) {
+        const top3 = sectors.slice(0, 3).reduce((s2, a) => s2 + Number(a.pct), 0);
+        const up = sectors.filter((a) => (num(a.delta_pct) ?? 0) > 0).sort((a, b) => Number(b.delta_pct) - Number(a.delta_pct))[0];
+        const down = sectors.filter((a) => (num(a.delta_pct) ?? 0) < 0).sort((a, b) => Number(a.delta_pct) - Number(b.delta_pct))[0];
+        text = `${name} has **${top3.toFixed(0)}%** of its portfolio in its top 3 sectors: ${sectors
+          .slice(0, 3)
+          .map((a) => `${a.label} (${Number(a.pct).toFixed(1)}%)`)
+          .join(", ")}.`;
+        if (!free && up) text += ` Biggest increase${period}: ${up.label} (+${Number(up.delta_pct).toFixed(1)} pts).`;
+        if (!free && down) text += ` Biggest cut: ${down.label} (${Number(down.delta_pct).toFixed(1)} pts).`;
+        const cov = coverage("sector");
+        if (cov < 80)
+          text += ` Note: this fund's disclosure names sectors for only ${cov.toFixed(0)}% of its portfolio, so these figures understate its real sector weights.`;
+        facts = shown.map((a) => ({ label: String(a.label), value: fmtA(a) }));
+      }
+      // asset mix and credit ratings (mainly debt and hybrid funds): paid detail
+      if (!free) {
+        for (const dim of ["asset_class", "rating"]) {
+          const rows = alloc.filter((a) => a.dimension === dim).slice(0, 6);
+          if (rows.length) facts.push(...rows.map((a) => ({ label: `${dim === "rating" ? "Rating" : "Asset"}: ${a.label}`, value: fmtA(a) })));
+        }
+        if (!sectors.length) {
+          text = `${name}'s portfolio mix${period}:`;
+          const cov = coverage("rating");
+          if (cov > 0 && cov < 80) text += ` Credit ratings are disclosed for ${cov.toFixed(0)}% of the portfolio.`;
+        }
+      } else {
+        if (!sectors.length) text = `${name}'s asset and credit-rating mix is available on Pro.`;
+        facts.push({ label: "More on Pro", value: "full sector list, monthly changes, asset mix and credit ratings" });
+      }
+      break;
+    }
     case "consistency": {
       if (!num(row.batting_months)) {
         text = `I don't have a batting average for ${name} yet.`;
@@ -381,6 +430,69 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext): Pr
   if (metric !== "returns") opts.push("What are its returns?");
   blocks.push({ type: "choices", text: "", options: opts });
   return { blocks, context: { ...ctx, last_intent: { intent: "fund_metric", fund: "result:1", metric }, last_results: [f.code] } };
+}
+
+// ---------------- sector_exposure ----------------
+
+async function sectorExposure(theme: string, limit: number, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
+  const pattern = THEME_SECTOR_PATTERNS[theme];
+  if (!pattern)
+    return { blocks: [{ type: "text", text: "I can show sector exposure for technology, banking, pharma, consumption, infrastructure, energy, auto and defence." }], context: ctx };
+  const n = Math.min(limit, MAX_ROWS, exec.maxRankRows);
+  // diversified active equity funds only: sector funds would trivially top the list
+  const re = pattern.source.replace(/'/g, "''");
+  const where = `u.active_passive = 'Active' AND u.grp IN (${inList(DEFAULT_EQUITY_GROUPS)})`;
+  const exposureSql = `SELECT scheme_code, sum(pct) AS exposure FROM alloc WHERE dimension = 'sector' AND regexp_matches(lower(label), '${re}') GROUP BY scheme_code`;
+  const rows = await query<Row>(`SELECT u.*, e.exposure FROM (${exposureSql}) e JOIN universe u USING (scheme_code) WHERE ${where} ORDER BY e.exposure DESC LIMIT ${n}`);
+  if (!rows.length) return { blocks: [{ type: "text", text: `No diversified funds hold ${groupName(theme)} sectors right now.` }], context: ctx };
+  const funds = rows.map((r) => toFundRow(r));
+  const [{ med }] = await query<{ med: number }>(`SELECT median(e.exposure) AS med FROM (${exposureSql}) e JOIN universe u USING (scheme_code) WHERE ${where}`);
+  const blocks: Block[] = [
+    {
+      type: "text",
+      text: `Diversified equity funds with the most **${groupName(theme)}** exposure (share of portfolio in those sectors; the typical fund holds ${Number(med).toFixed(1)}%):`,
+    },
+    { type: "bullets", items: rows.map((r, i) => `**${i + 1}. ${r.name}**: ${Number(r.exposure).toFixed(1)}% · ${groupName(String(r.grp))} · score ${fmtScore(r.score_balanced)}`) },
+    { type: "fund_table", title: `${groupName(theme)} exposure`, rows: funds },
+    {
+      type: "note",
+      text: `Dedicated ${groupName(theme)} sector funds are left out; ask "best ${groupName(theme).toLowerCase()} funds" for those. Based on holdings disclosed with sector names; a few AMCs report some holdings without them.`,
+    },
+  ];
+  if (exec.planId === "free" && limit > rows.length) blocks.push({ type: "note", text: `Free plan shows the top ${rows.length}. Upgrade to see up to ${MAX_ROWS}.` });
+  blocks.push({ type: "choices", text: "", options: ["Compare the top 2", "Tell me more about the first one", `Best ${groupName(theme)} funds`] });
+  return { blocks, context: { ...ctx, last_intent: { intent: "sector_exposure", theme, limit }, last_results: funds.map((f) => f.code) } };
+}
+
+// ---------------- similar_funds ----------------
+
+async function similarFunds(ref: string, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
+  const r = await resolveRef(ref, ctx);
+  if (!r.code) return notFound(r.candidates, ctx);
+  const [row] = await fundsByCodes([r.code]);
+  if (!row) return notFound([], ctx);
+  const base = toFundRow(row);
+  const n = Math.min(5, exec.maxRankRows);
+  const better = await query<Row>(
+    `SELECT * FROM universe WHERE grp = ${q(String(row.grp))} AND scheme_code <> ${q(base.code)} AND eligible AND score_balanced IS NOT NULL
+     ${base.score !== null ? `AND score_balanced > ${Number(base.score)}` : ""}
+     ORDER BY score_balanced DESC LIMIT ${n}`,
+  );
+  const cat = groupName(String(row.grp));
+  if (!better.length)
+    return {
+      blocks: [{ type: "text", text: `**${base.name}** is already the top-scored ${cat} fund (score ${fmtScore(base.score)}), so no fund in the category scores higher.` }],
+      context: { ...ctx, last_intent: { intent: "fund_profile", fund: "result:1" }, last_results: [base.code] },
+    };
+  const funds = better.map((x) => toFundRow(x));
+  const blocks: Block[] = [
+    { type: "text", text: `${cat} funds scoring higher than **${base.name}** (score ${fmtScore(base.score)}):` },
+    { type: "fund_table", title: `Alternatives in ${cat}`, rows: funds },
+    ...(await rankInsights(better, funds, [String(row.grp)])),
+    { type: "note", text: "Switching funds can trigger exit loads and capital-gains tax. Check both before moving money." },
+    { type: "choices", text: "", options: [`Compare ${base.name} vs ${funds[0].name}`, "Tell me more about the first one"] },
+  ];
+  return { blocks, context: { ...ctx, last_intent: { intent: "similar_funds", fund: ref }, last_results: funds.map((f) => f.code) } };
 }
 
 function notFound(candidates: string[] | undefined, ctx: ChatContext): Result {
@@ -496,6 +608,8 @@ const OOS: Record<string, string> = {
   prediction: "I don't predict markets or future returns. I can show how funds have behaved in past falls and recoveries, which says a lot about the ride to expect.",
   news: "I don't cover market news yet. I can show how a category has performed and where fund managers have been moving money.",
   non_mf: "I only cover Indian mutual funds.",
+  no_data:
+    "isn't in our data yet. For any fund I can show returns (3 months, 6 months, 1 year), the 3-year SIP result, batting average, momentum, resilience in crashes, fund size, age and sector allocation.",
 };
 
 const HELP_OPTIONS = ["Best small cap funds", "Best passive funds", "Best technology funds", "Compare Parag Parikh Flexi Cap and HDFC Flexi Cap", "What is your 5-pillar score?", "Where are fund managers moving money?"];
@@ -509,7 +623,11 @@ export async function execute(intent: Intent, ctx: ChatContext, opts: ExecOption
     case "fund_profile":
       return fundProfile(intent.fund, ctx);
     case "fund_metric":
-      return fundMetric(intent.fund, intent.metric, ctx);
+      return fundMetric(intent.fund, intent.metric, ctx, opts);
+    case "sector_exposure":
+      return sectorExposure(intent.theme, intent.limit, ctx, opts);
+    case "similar_funds":
+      return similarFunds(intent.fund, ctx, opts);
     case "compare":
       return compare(intent.funds, ctx);
     case "explain_metric":
@@ -519,7 +637,16 @@ export async function execute(intent: Intent, ctx: ChatContext, opts: ExecOption
     case "clarify":
       return { blocks: [{ type: "choices", text: intent.question, options: intent.options }], context: ctx };
     case "out_of_scope":
-      return { blocks: [{ type: "text", text: OOS[intent.reason] }, { type: "choices", text: "", options: HELP_OPTIONS.slice(0, 3) }], context: ctx };
+      return {
+        blocks: [
+          {
+            type: "text",
+            text: intent.reason === "no_data" ? `${intent.topic ? `**${intent.topic[0].toUpperCase()}${intent.topic.slice(1)}**` : "That"} ${OOS.no_data}` : OOS[intent.reason],
+          },
+          { type: "choices", text: "", options: HELP_OPTIONS.slice(0, 3) },
+        ],
+        context: ctx,
+      };
     case "help":
       return {
         blocks: [{ type: "choices", text: "I can rank funds by our 5-pillar score, show any fund's details, compare funds, explain our metrics and show sector shifts. Try:", options: HELP_OPTIONS }],

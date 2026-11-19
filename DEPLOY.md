@@ -5,14 +5,14 @@ Everything runs in **asia-south1 (Mumbai)**.
 
 ```bash
 PROJECT=gochanakya-main          # Cloud Run, buckets, Gemini
-FB_PROJECT=go-mf                 # Firebase / Firestore (users)
+FB_PROJECT=go-mutualfunds               # Firebase / Firestore (users)
 REGION=asia-south1
 SERVING=gomf-serving             # new bucket for this product
 IMAGE=$REGION-docker.pkg.dev/$PROJECT/gomf/app
 ```
 
 ## 1. Firebase project + Firestore (console, once)
-1. https://console.firebase.google.com → **Add project** → name `go-mf` (note the project ID it gives you; use it as `FB_PROJECT`).
+1. https://console.firebase.google.com → **Add project** → name `Go-MutualFunds` (project ID: `go-mutualfunds`).
 2. **Build → Firestore Database → Create database** → **Native mode**, location **asia-south1 (Mumbai)**.
    ⚠️ The location can never be changed later.
 3. **Rules** tab → paste the contents of `firestore.rules` (deny all client access) → **Publish**.
@@ -97,7 +97,7 @@ Billing → Budgets & alerts → create a budget on `gochanakya-main` with alert
 ## 10. Give someone Pro (until payments exist)
 They must sign in once first. From this folder on your laptop (uses your gcloud login):
 ```bash
-FIRESTORE_PROJECT=go-mf npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 pro 30
+FIRESTORE_PROJECT=go-mutualfunds npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 pro 30
 ```
 
 ## Updating later

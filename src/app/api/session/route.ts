@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJson } from "@/lib/http";
 import { z } from "zod";
 import { NEW_USERS_PER_IP_PER_DAY } from "@/lib/config/plans";
 import { clientIp } from "@/lib/users/auth";
@@ -13,7 +14,7 @@ export const dynamic = "force-dynamic";
 const Body = z.object({ phone: z.string().max(20), consent: z.literal(true) });
 
 export async function POST(req: Request) {
-  const parsed = Body.safeParse(await req.json().catch(() => null));
+  const parsed = Body.safeParse(await readJson(req));
   if (!parsed.success) return NextResponse.json({ error: "Enter your mobile number and accept the terms." }, { status: 400 });
   const phone = normalizePhone(parsed.data.phone);
   if (!phone) return NextResponse.json({ error: "Enter a valid 10-digit Indian mobile number." }, { status: 400 });

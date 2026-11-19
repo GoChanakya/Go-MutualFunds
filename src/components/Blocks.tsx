@@ -1,18 +1,8 @@
 "use client";
 
 import { Fragment } from "react";
-import type { Block, Fact, FundRow, PillarScores } from "@/lib/types";
-
-const PILLARS: { key: keyof PillarScores; label: string }[] = [
-  { key: "resilience", label: "Resilience" },
-  { key: "consistency", label: "Consistency" },
-  { key: "momentum", label: "Momentum" },
-  { key: "returns", label: "Returns" },
-  { key: "track_record", label: "Track record" },
-];
-
-const r0 = (v: number | null) => (v === null ? "–" : String(Math.round(v)));
-const pct = (v: number | null) => (v === null ? "–" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+import type { Block, Fact, FundRow } from "@/lib/types";
+import { Delta, PillarBars, Score, ScoreRing, cr, pct, r0 } from "./ui";
 
 // **bold** only; everything else is plain text.
 function Rich({ text }: { text: string }) {
@@ -24,19 +14,18 @@ function Rich({ text }: { text: string }) {
   );
 }
 
-function KV({ facts }: { facts: Fact[] }) {
+// Stat tiles: label on top, value below, optional hint.
+function Tiles({ facts }: { facts: Fact[] }) {
   return (
-    <dl className="kv">
+    <div className="tiles">
       {facts.map((f, k) => (
-        <Fragment key={k}>
-          <dt>{f.label}</dt>
-          <dd>
-            {f.value}
-            {f.hint && <small> · {f.hint}</small>}
-          </dd>
-        </Fragment>
+        <div className="tile" key={k}>
+          <span className="tile-l">{f.label}</span>
+          <span className="tile-v">{f.value}</span>
+          {f.hint && <span className="tile-h">{f.hint}</span>}
+        </div>
       ))}
-    </dl>
+    </div>
   );
 }
 
@@ -49,12 +38,12 @@ function Bars({ block }: { block: Extract<Block, { type: "bars" }> }) {
     const w = (Math.abs(v) / max) * 50;
     return (
       <div className="bar-track">
-        <i className={cls} style={v >= 0 ? { left: "50%", width: `${w}%` } : { left: `${50 - w}%`, width: `${w}%` }} />
+        <i className={`${cls} ${v < 0 ? "neg" : ""}`} style={v >= 0 ? { left: "50%", width: `${w}%` } : { left: `${50 - w}%`, width: `${w}%` }} />
       </div>
     );
   };
   return (
-    <div className="bars">
+    <div className="panel bars">
       <div className="bars-head">
         <b>{block.title}</b>
         <span className="legend">
@@ -69,7 +58,7 @@ function Bars({ block }: { block: Extract<Block, { type: "bars" }> }) {
             {bar(r.ref, "ref")}
           </div>
           <span className="bars-val">
-            {pct(r.value)}
+            <Delta value={r.value} />
             <small> vs {pct(r.ref)}</small>
           </span>
         </div>
@@ -78,37 +67,39 @@ function Bars({ block }: { block: Extract<Block, { type: "bars" }> }) {
   );
 }
 
-function FundTable({ rows, onAsk }: { rows: FundRow[]; onAsk: (q: string) => void }) {
+function FundList({ rows, onAsk }: { rows: FundRow[]; onAsk: (q: string) => void }) {
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Fund</th>
-            <th className="num">Score</th>
-            <th className="num hide-sm">1Y return</th>
-            <th className="num hide-sm">AUM</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((f, i) => (
-            <tr key={f.code}>
-              <td>
-                {i + 1}.{" "}
-                <button className="link" onClick={() => onAsk(`Tell me about ${f.name}`)}>
-                  {f.name}
-                </button>
-                <div className="sub">{PILLARS.map((p) => `${p.label} ${r0(f.pillars[p.key])}`).join(" · ")}</div>
-              </td>
-              <td className="num">
-                <b>{r0(f.score)}</b>
-              </td>
-              <td className="num hide-sm">{pct(f.ret_1y)}</td>
-              <td className="num hide-sm">{f.aum_cr === null ? "–" : `₹${f.aum_cr.toLocaleString("en-IN")} Cr`}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="panel fund-list">
+      <div className="fl-head">
+        <span>Fund</span>
+        <span className="hide-sm">Pillars (0–100 vs category)</span>
+        <span className="num">1Y</span>
+        <span className="num hide-sm">AUM</span>
+        <span className="num">Score</span>
+      </div>
+      {rows.map((f, i) => (
+        <div className="fl-row" key={f.code}>
+          <div className="fl-name">
+            <span className="rank">{i + 1}</span>
+            <div>
+              <button className="link" onClick={() => onAsk(`Tell me about ${f.name}`)}>
+                {f.name}
+              </button>
+              <div className="sub">{f.group}</div>
+            </div>
+          </div>
+          <div className="hide-sm">
+            <PillarBars pillars={f.pillars} compact />
+          </div>
+          <div className="num">
+            <Delta value={f.ret_1y} />
+          </div>
+          <div className="num hide-sm sub">{cr(f.aum_cr)}</div>
+          <div className="num">
+            <Score value={f.score} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -126,14 +117,14 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
             );
           case "note":
             return (
-              <p key={i} className="muted">
+              <p key={i} className="note">
                 {b.text}
               </p>
             );
           case "fund_table":
-            return <FundTable key={i} rows={b.rows} onAsk={onAsk} />;
+            return <FundList key={i} rows={b.rows} onAsk={onAsk} />;
           case "facts":
-            return <KV key={i} facts={b.facts} />;
+            return <Tiles key={i} facts={b.facts} />;
           case "heading":
             return (
               <h4 key={i} className="section">
@@ -153,51 +144,71 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
           case "verdict":
             return (
               <div key={i} className={`verdict ${b.tone}`}>
-                <b>{b.label}.</b> <Rich text={b.text} />
+                <span className="v-icon" aria-hidden>
+                  {b.tone === "good" ? "▲" : b.tone === "weak" ? "▼" : "●"}
+                </span>
+                <div>
+                  <b>{b.label}</b>
+                  <div>
+                    <Rich text={b.text} />
+                  </div>
+                </div>
               </div>
             );
           case "bars":
             return <Bars key={i} block={b} />;
           case "fund_card":
             return (
-              <Fragment key={i}>
-                <div>
-                  <h3>{b.fund.name}</h3>
-                  <div className="sub">
-                    {b.fund.group} · Score <b>{r0(b.fund.score)}</b>/100 vs category
-                  </div>
-                </div>
-                <KV facts={[...PILLARS.map((p) => ({ label: p.label, value: r0(b.fund.pillars[p.key]) })), ...b.facts]} />
-                {b.strengths.length > 0 && (
+              <div key={i} className="panel fund-head">
+                <div className="fh-top">
                   <div>
-                    <b>Strengths</b>
-                    <ul>{b.strengths.map((s, k) => <li key={k}>{s}</li>)}</ul>
+                    <h3>{b.fund.name}</h3>
+                    <div className="chips">
+                      <span className="chip">{b.fund.group}</span>
+                      {b.fund.aum_cr !== null && <span className="chip">{cr(b.fund.aum_cr)}</span>}
+                      {b.fund.age_years !== null && <span className="chip">{b.fund.age_years.toFixed(1)} yrs</span>}
+                    </div>
                   </div>
+                  <ScoreRing value={b.fund.score} />
+                </div>
+                <PillarBars pillars={b.fund.pillars} />
+                <Tiles facts={b.facts} />
+                {b.strengths.length > 0 && (
+                  <ul className="marks good">
+                    {b.strengths.map((s, k) => (
+                      <li key={k}>{s}</li>
+                    ))}
+                  </ul>
                 )}
                 {b.watch.length > 0 && (
                   <div>
-                    <b>Watch out</b>
-                    <ul>{b.watch.map((s, k) => <li key={k}>{s}</li>)}</ul>
+                    <div className="mini-title">Watch out</div>
+                    <ul className="marks warn">
+                      {b.watch.map((s, k) => (
+                        <li key={k}>{s}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
                 {b.more.length > 0 && (
-                  <details>
+                  <details className="more">
                     <summary>More details</summary>
-                    <KV facts={b.more} />
+                    <Tiles facts={b.more} />
                   </details>
                 )}
-              </Fragment>
+              </div>
             );
           case "compare":
             return (
-              <div key={i} className="table-wrap">
-                <table>
+              <div key={i} className="panel table-wrap">
+                <table className="cmp">
                   <thead>
                     <tr>
                       <th></th>
                       {b.funds.map((f, k) => (
                         <th key={k} className="num">
-                          {f.name}
+                          <div className="cmp-name">{f.name}</div>
+                          <Score value={f.score} size="sm" />
                         </th>
                       ))}
                     </tr>
@@ -206,8 +217,8 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
                     {b.rows.map((r, k) => (
                       <tr key={k}>
                         <td>{r.label}</td>
-                        {r.values.map((v, k) => (
-                          <td key={k} className={`num${r.best === k ? " best" : ""}`}>
+                        {r.values.map((v, j) => (
+                          <td key={j} className={`num${r.best === j ? " best" : ""}`}>
                             {v}
                           </td>
                         ))}
@@ -217,37 +228,33 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
                 </table>
               </div>
             );
-          case "sector_shifts":
+          case "sector_shifts": {
+            const max = Math.max(0.01, ...[...b.up, ...b.down].map((r) => Math.abs(r.change_pp)));
+            const row = (r: (typeof b.up)[number], k: number, cls: "pos" | "neg") => (
+              <div className="shift" key={k} title={`${r.funds_adding} funds adding, ${r.funds_cutting} cutting · now ${r.share_now}% of holdings`}>
+                <span>{r.sector}</span>
+                <div className="shift-track">
+                  <i className={cls} style={{ width: `${(Math.abs(r.change_pp) / max) * 100}%` }} />
+                </div>
+                <span className={`num ${cls}`}>
+                  {r.change_pp > 0 ? "+" : ""}
+                  {r.change_pp.toFixed(2)}
+                </span>
+              </div>
+            );
             return (
-              <div key={i} className="cols">
+              <div key={i} className="panel cols">
                 <div>
-                  <b>Adding</b>
-                  <table>
-                    <tbody>
-                      {b.up.map((r, k) => (
-                        <tr key={k}>
-                          <td>{r.sector}</td>
-                          <td className="num up">+{r.change_pp.toFixed(2)} pts</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="mini-title">Adding (pts of holdings)</div>
+                  {b.up.map((r, k) => row(r, k, "pos"))}
                 </div>
                 <div>
-                  <b>Cutting</b>
-                  <table>
-                    <tbody>
-                      {b.down.map((r, k) => (
-                        <tr key={k}>
-                          <td>{r.sector}</td>
-                          <td className="num down">{r.change_pp.toFixed(2)} pts</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="mini-title">Cutting</div>
+                  {b.down.map((r, k) => row(r, k, "neg"))}
                 </div>
               </div>
             );
+          }
           case "choices":
             // a question back to the user always shows its options; plain follow-ups only under the latest answer
             if (!b.text && !showFollowups) return null;
@@ -257,7 +264,7 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
                 <div className="followups">
                   {b.options.slice(0, b.text ? 6 : 3).map((o, k) => (
                     <button key={k} className="pill" onClick={() => onAsk(o)}>
-                      {o}
+                      {o} <span aria-hidden>↗</span>
                     </button>
                   ))}
                 </div>
@@ -268,3 +275,4 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
     </>
   );
 }
+

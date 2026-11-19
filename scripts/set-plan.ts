@@ -1,7 +1,7 @@
 // Admin: give a user the paid plan (until payments are integrated), or move them back to free.
 // Usage (against Firestore):
-//   FIRESTORE_PROJECT=go-mf npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 pro 30
-//   FIRESTORE_PROJECT=go-mf npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 free
+//   FIRESTORE_PROJECT=go-mutualfunds npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 pro 30
+//   FIRESTORE_PROJECT=go-mutualfunds npx tsx --conditions=react-server scripts/set-plan.ts 9876543210 free
 import { normalizePhone, uidForPhone } from "@/lib/users/session";
 import { users } from "@/lib/users/store";
 

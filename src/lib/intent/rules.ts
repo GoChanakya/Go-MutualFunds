@@ -1,5 +1,5 @@
 import "server-only";
-import { GROUPS } from "@/lib/config/groups";
+import { GROUPS, THEME_SECTOR_PATTERNS } from "@/lib/config/groups";
 import { METRICS } from "@/lib/config/metrics";
 import { mentionsBrand, resolveOne, strongFundMatch } from "@/lib/data/resolve";
 import type { ChatContext } from "@/lib/types";
@@ -95,6 +95,7 @@ function rank(groups: string[], extra: Partial<RankIntent>, base?: RankIntent): 
 
 // Which single metric a question about one fund is asking for. Specific periods before generic "returns".
 const FUND_METRIC_RES: [FundMetric, RegExp][] = [
+  ["allocation", /\b(sectors?|sector allocation|allocation|holdings?|portfolio|exposure|asset mix|asset allocation|credit (quality|ratings?)|ratings? mix|invest(s|ing)? in|where does)\b/],
   ["consistency", /\b(batting( avg| average)?|consisten\w*|beat (the |its )?(category|peers))\b/],
   ["ret_6m", /\b(6|six) ?(m|mo|mon|months?)\b/],
   ["ret_3m", /\b(3|three) ?(m|mo|mon|months?)\b/],
@@ -112,7 +113,7 @@ export function detectFundMetric(t: string): FundMetric | null {
   return FUND_METRIC_RES.find(([, re]) => re.test(t))?.[0] ?? null;
 }
 const METRIC_WORDS =
-  /\b(batting|avg|average|consisten\w*|beat|category|peers|returns?|perform\w*|gains?|sip|resilien\w*|recover\w*|crash\w*|covid|falls?|fell|downside|drawdown|momentum|rank\w*|aum|size|assets|age|old|launched|launch|date|inception|nav|score|rating|rated|pillars?|annual\w*|last|year|yr|months?|mon|mo|according|to|by|its|whats|what's|\d+ ?[my])\b/g;
+  /\b(sectors?|allocation|holdings?|portfolio|exposure|asset|mix|credit|quality|ratings?|invest\w*|where|does|batting|avg|average|consisten\w*|beat|category|peers|returns?|perform\w*|gains?|sip|resilien\w*|recover\w*|crash\w*|covid|falls?|fell|downside|drawdown|momentum|rank\w*|aum|size|assets|age|old|launched|launch|date|inception|nav|score|rating|rated|pillars?|annual\w*|last|year|yr|months?|mon|mo|according|to|by|its|whats|what's|\d+ ?[my])\b/g;
 
 const PRONOUN = /\b(it|its|it's|this fund|this one|that fund|that one|the fund|same fund)\b/;
 
@@ -137,6 +138,34 @@ export async function rulesParse(question: string, ctx: ChatContext): Promise<In
     return { intent: "out_of_scope", reason: "prediction" };
   if (has(t, /\bnews\b/) || has(t, /\bwhy (did|is|are|has|have)\b.*\b(fall|fell|falling|drop\w*|crash\w*|ris\w*|rall\w*|down|up)\b/))
     return { intent: "out_of_scope", reason: "news" };
+
+  // Things we don't have data for yet: say so honestly instead of showing the help menu
+  const noData = t.match(
+    /\b(expense ratio|ter|exit load|fund manager|managed by|top holdings?|stock holdings?|which stocks|stocks? (held|it holds)|(3|5|10|three|five|ten)[ -]?(y|yr|years?) (returns?|cagr)|cagr|alpha|beta|sharpe|sortino|standard deviation)\b/,
+  );
+  if (noData) return { intent: "out_of_scope", reason: "no_data", topic: noData[1] };
+
+  // Funds with the most exposure to a sector: "funds with most IT exposure", "which funds invest heavily in banks"
+  if (
+    has(t, /\b(exposure|exposed|invest(s|ing)? (most|heavily|more|maximum)|most invested|heav(y|ily|iest)|overweight|highest (allocation|weight\w*|holding))\b/) &&
+    !(await mentionsBrand(t))
+  ) {
+    const theme = Object.entries(THEME_SECTOR_PATTERNS).find(([, re]) => re.test(t))?.[0];
+    if (theme) return { intent: "sector_exposure", theme, limit: parseLimit(t) ?? 5 };
+  }
+
+  // Alternatives to a fund: "alternatives to HDFC Small Cap", "funds similar to quant small cap"
+  if (has(t, /\b(similar to|alternatives?( to| for)?|instead of|better than|replacement for|peers of|switch from)\b/)) {
+    const nameText = t
+      .replace(/\b(similar to|alternatives?|to|for|instead of|better than|replacement|peers of|switch from|funds?|show|me|some|any|what are|the|give)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if ((await mentionsBrand(nameText)) || (await strongFundMatch(nameText))) {
+      const r = await resolveOne(nameText);
+      if (r.fund) return { intent: "similar_funds", fund: nameText };
+    } else if ((last?.intent === "fund_profile" || last?.intent === "fund_metric") && ctx.last_results?.length === 1)
+      return { intent: "similar_funds", fund: "result:1" };
+  }
 
   // One metric of one fund: "parag flexi batting avg", "what's its 6m return", follow-up "and 3 month?"
   const metric = detectFundMetric(t);

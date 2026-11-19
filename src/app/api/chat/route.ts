@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJson } from "@/lib/http";
 import { z } from "zod";
 import { REQUESTS_PER_IP_PER_DAY } from "@/lib/config/plans";
 import { getStore } from "@/lib/data/store";
@@ -26,7 +27,7 @@ const Body = z.object({
 
 export async function POST(req: Request) {
   const t0 = Date.now();
-  const parsedBody = Body.safeParse(await req.json().catch(() => null));
+  const parsedBody = Body.safeParse(await readJson(req));
   if (!parsedBody.success) return NextResponse.json({ error: "bad request" }, { status: 400 });
   const { message, context } = parsedBody.data;
 
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
 
   try {
     const data = await getStore();
-    const { intent, route } = await parse(message, ctx);
+    const { intent, route, model } = await parse(message, ctx);
     const result = await execute(intent, ctx, { maxRankRows: plan.chatRankRows, planId: plan.id });
     const body: ChatResponse = {
       blocks: result.blocks,
@@ -57,7 +58,7 @@ export async function POST(req: Request) {
     };
 
     const safeQuestion = redact(message);
-    const event = { kind: "chat", question: safeQuestion, intent: intent.intent, route, funds_shown: result.context.last_results ?? [] };
+    const event = { kind: "chat", question: safeQuestion, intent: intent.intent, route, llm_model: model ?? null, funds_shown: result.context.last_results ?? [] };
     // History (not awaited: never slows the answer). Answers aren't stored; they can be regenerated from the data.
     store.logEvent(user.uid, event).catch((e) => console.error(JSON.stringify({ type: "history_write_failed", error: String(e).slice(0, 200) })));
     // Analytics: one structured log line per question -> Cloud Logging -> BigQuery sink.
