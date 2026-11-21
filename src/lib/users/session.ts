@@ -1,11 +1,15 @@
 import "server-only";
 import crypto from "node:crypto";
 
-// Signed session cookie: "<uid>.<issuedAt>.<hmac>". The server issues it after the phone step; the client can't forge it.
-// TODO when OTP login lands: issue this only after Firebase Phone Auth verifies the number.
+// Two signed cookies; the client can't forge either.
+//   gomf_session = "<uid>.<issuedAt>.<hmac>"  issued only after the WhatsApp OTP verifies the number
+//   gomf_anon    = "<anonId>.<issuedAt>.<hmac>"  a visitor without a login, so their free questions are counted on our server
+// Each kind is signed with its own prefix, so one can never be passed off as the other.
 
 export const SESSION_COOKIE = "gomf_session";
 export const SESSION_DAYS = 90;
+export const ANON_COOKIE = "gomf_anon";
+export const ANON_DAYS = 365;
 
 let devSecretWarned = false;
 function secret(): string {
@@ -19,25 +23,31 @@ function secret(): string {
   return "dev-only-secret-change-me-dev-only-secret";
 }
 
-const sign = (data: string) => crypto.createHmac("sha256", secret()).update(data).digest("base64url");
+const sign = (kind: string, data: string) => crypto.createHmac("sha256", secret()).update(`${kind}:${data}`).digest("base64url");
 
-export function createSessionToken(uid: string): string {
-  const data = `${uid}.${Date.now()}`;
-  return `${data}.${sign(data)}`;
+function createToken(kind: "user" | "anon", id: string): string {
+  const data = `${id}.${Date.now()}`;
+  return `${data}.${sign(kind, data)}`;
 }
 
-export function verifySessionToken(token: string | undefined | null): string | null {
+function verifyToken(kind: "user" | "anon", token: string | undefined | null, idRe: RegExp, days: number): string | null {
   if (!token) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
-  const [uid, iat, mac] = parts;
-  const expected = sign(`${uid}.${iat}`);
+  const [id, iat, mac] = parts;
   const a = Buffer.from(mac);
-  const b = Buffer.from(expected);
+  const b = Buffer.from(sign(kind, `${id}.${iat}`));
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  if (Date.now() - Number(iat) > SESSION_DAYS * 86_400_000) return null;
-  return /^u_[a-f0-9]{20}$/.test(uid) ? uid : null;
+  if (Date.now() - Number(iat) > days * 86_400_000) return null;
+  return idRe.test(id) ? id : null;
 }
+
+export const createSessionToken = (uid: string) => createToken("user", uid);
+export const verifySessionToken = (token: string | undefined | null) => verifyToken("user", token, /^u_[a-f0-9]{20}$/, SESSION_DAYS);
+
+export const newAnonId = () => `a_${crypto.randomBytes(10).toString("hex")}`;
+export const createAnonToken = (anonId: string) => createToken("anon", anonId);
+export const verifyAnonToken = (token: string | undefined | null) => verifyToken("anon", token, /^a_[a-f0-9]{20}$/, ANON_DAYS);
 
 // Indian mobile: optional +91 / 91 / 0 prefix, then 10 digits starting 6-9. Returns "+91XXXXXXXXXX" or null.
 export function normalizePhone(input: string): string | null {

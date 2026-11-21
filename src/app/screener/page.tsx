@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
 import { Header, Upgrade } from "@/components/Header";
-import { SignIn } from "@/components/SignIn";
+import { AuthModal } from "@/components/SignIn";
 import { Arrow, BattingDots, Delta, LockIcon, PillarBars, ScoreRing, cr } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { AllocRow, FundDetail, ScreenerCard, ScreenerResult } from "@/lib/screener-types";
@@ -55,7 +55,8 @@ function toggle<T>(xs: T[], x: T): T[] {
 type Res = ScreenerResult & { plan: string; as_of: string };
 
 export default function ScreenerPage() {
-  const { me, setMe, signIn, signOut } = useMe();
+  const { me, setMe, refresh, signOut } = useMe();
+  const [authOpen, setAuthOpen] = useState(false);
   const router = useRouter();
   const [f, setF] = useState<Filters>(DEFAULTS);
   const [res, setRes] = useState<Res | null>(null);
@@ -76,18 +77,16 @@ export default function ScreenerPage() {
         const r = await fetch("/api/screener", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...filters, page }) });
         const data = await r.json();
         if (id !== seq.current) return; // a newer search started
-        if (r.status === 401) return setMe(null);
         if (!r.ok) return setErr(data.message ?? data.error ?? "Search failed");
         setRes(data);
         setCards((prev) => (page === 0 ? data.cards : [...prev, ...data.cards]));
-        setMe((m) => (m ? { ...m, used: { ...m.used, screener: m.used.screener + 1 } } : m));
       } catch {
         if (id === seq.current) setErr("Search failed. Check your connection.");
       } finally {
         if (id === seq.current) setLoading(false);
       }
     },
-    [setMe],
+    [],
   );
 
   // re-run (debounced) when filters change
@@ -111,15 +110,8 @@ export default function ScreenerPage() {
   }
 
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setF((x) => ({ ...x, [k]: v }));
-  const header = <Header me={me} onSignOut={signOut} usageKind="screener" />;
+  const header = <Header me={me} onSignIn={() => setAuthOpen(true)} onSignOut={signOut} />;
   if (me === undefined) return <div className="app">{header}</div>;
-  if (me === null)
-    return (
-      <div className="app">
-        {header}
-        <SignIn onSignIn={signIn} />
-      </div>
-    );
 
   const pro = me.plan === "pro";
   const kinds = res ? [...new Set(res.facets.map((x) => x.kind))] : [];
@@ -312,6 +304,16 @@ export default function ScreenerPage() {
             Compare in chat
           </button>
         </div>
+      )}
+      {authOpen && (
+        <AuthModal
+          onClose={() => setAuthOpen(false)}
+          onSignedIn={(m) => {
+            setMe(m);
+            setAuthOpen(false);
+            refresh();
+          }}
+        />
       )}
     </div>
   );

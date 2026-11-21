@@ -1,8 +1,11 @@
-// Shape of /api/me and /api/session responses (shared with the browser).
+// Shape of /api/me (shared with the browser). Usage counts are deliberately not included: limits are enforced
+// on the server and the UI only reacts when one is reached.
 export type MeResponse = {
-  phone: string; // masked
+  signed_in: boolean;
+  phone: string | null; // masked
   plan: "free" | "pro";
   plan_expires_at: string | null;
-  limits: { chat: number; screener: number };
-  used: { chat: number; screener: number };
+  pro_interest: boolean;
 };
+
+export const ANON_ME: MeResponse = { signed_in: false, phone: null, plan: "free", plan_expires_at: null, pro_interest: false };

@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { currentViewer } from "@/lib/users/auth";
 import { meBody } from "@/lib/users/me";
+import { ANON_ME } from "@/lib/users/me-types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const v = await currentViewer();
-  if (!v) return NextResponse.json({ error: "not signed in" }, { status: 401 });
-  return NextResponse.json(await meBody(v.user));
+  return NextResponse.json(v ? meBody(v.user) : ANON_ME);
 }

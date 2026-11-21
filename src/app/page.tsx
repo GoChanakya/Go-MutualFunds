@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
-import { Header, Upgrade } from "@/components/Header";
-import { SignIn } from "@/components/SignIn";
+import { Header } from "@/components/Header";
+import { AuthModal, ProCard } from "@/components/SignIn";
 import { Arrow, LogoMark } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { Block, ChatContext, ChatResponse } from "@/lib/types";
 
-type Msg = { role: "user"; text: string } | { role: "bot"; blocks: Block[] } | { role: "error"; text: string } | { role: "limit"; text: string };
+type Msg = { role: "user"; text: string } | { role: "bot"; blocks: Block[] } | { role: "error"; text: string } | { role: "pro" };
 
 const STARTERS: { title: string; sub: string; q: string }[] = [
   { title: "Best small cap funds", sub: "Ranked by our 5-pillar score", q: "Best small cap funds" },
@@ -18,7 +18,7 @@ const STARTERS: { title: string; sub: string; q: string }[] = [
   { title: "Last month's return", sub: "Parag Parikh Flexi Cap vs its category", q: "Last month return of Parag Parikh Flexi Cap" },
 ];
 
-function Composer({ value, onChange, onSend, busy, left }: { value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean; left: number | null }) {
+function Composer({ value, onChange, onSend, busy }: { value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -50,19 +50,20 @@ function Composer({ value, onChange, onSend, busy, left }: { value: string; onCh
           maxLength={500}
           autoFocus
         />
-        <button className="send" type="submit" disabled={busy || !value.trim() || left === 0} aria-label="Send">
+        <button className="send" type="submit" disabled={busy || !value.trim()} aria-label="Send">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 19V5M5 12l7-7 7 7" />
           </svg>
         </button>
       </form>
-      {left !== null && left <= 3 && <div className="left-note">{left === 0 ? "No questions left today." : `${left} question${left === 1 ? "" : "s"} left today.`}</div>}
     </div>
   );
 }
 
 export default function Home() {
-  const { me, setMe, signIn, signOut } = useMe();
+  const { me, setMe, refresh, signOut } = useMe();
+  // sign-in dialog; `pending` = the question to re-ask after signing in
+  const [auth, setAuth] = useState<{ reason?: string; pending?: string } | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [ctx, setCtx] = useState<ChatContext>({});
   const [input, setInput] = useState("");
@@ -105,17 +106,26 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message, context: ctx }),
       });
-      const data = (await res.json()) as ChatResponse & { error?: string; message?: string };
-      if (res.status === 401) return setMe(null);
-      if (data.error === "limit_reached") {
-        setMsgs((m) => [...m, { role: "limit", text: data.message ?? "Daily limit reached." }]);
-        if (me) setMe({ ...me, used: { ...me.used, chat: me.limits.chat } });
+      const data = (await res.json()) as ChatResponse & { error?: string; message?: string; reason?: string };
+      if (data.error === "signup_required") {
+        // visitor out of free questions: sign in with WhatsApp, then the question is asked again
+        setMsgs((m) => m.slice(0, -1));
+        setAuth({
+          pending: message,
+          reason:
+            data.reason === "network"
+              ? "Too many free questions from this network today. Sign in to continue."
+              : "You've used your 10 free questions. Sign in with WhatsApp to continue.",
+        });
         return;
       }
-      if (!res.ok || data.error) throw new Error(data.error ?? "Request failed");
+      if (data.error === "upgrade_required") {
+        setMsgs((m) => [...m, { role: "pro" }]);
+        return;
+      }
+      if (!res.ok || data.error) throw new Error(data.message ?? data.error ?? "Request failed");
       setCtx(data.context);
       setAsOf(data.meta.as_of);
-      if (me) setMe({ ...me, plan: data.meta.plan, used: { ...me.used, chat: data.meta.usage.used }, limits: { ...me.limits, chat: data.meta.usage.limit } });
       setMsgs((m) => [...m, { role: "bot", blocks: data.blocks }]);
     } catch (e) {
       setMsgs((m) => [...m, { role: "error", text: e instanceof Error ? e.message : "Something went wrong" }]);
@@ -129,18 +139,19 @@ export default function Home() {
       Answers use GoChanakya data{asOf ? ` as of ${asOf}` : ""}. For information only, not investment advice.
     </div>
   );
-  const left = me ? Math.max(0, me.limits.chat - me.used.chat) : null;
-  const header = <Header me={me} onSignOut={signOut} />;
-
-  if (me === undefined) return <div className="app">{header}</div>;
-  if (me === null)
-    return (
-      <div className="app">
-        {header}
-        <SignIn onSignIn={signIn} />
-        {disclaimer}
-      </div>
-    );
+  const header = <Header me={me} onSignIn={() => setAuth({})} onSignOut={signOut} />;
+  const authModal = auth && (
+    <AuthModal
+      reason={auth.reason}
+      onClose={() => setAuth(null)}
+      onSignedIn={(m) => {
+        setMe(m);
+        const pending = auth.pending;
+        setAuth(null);
+        if (pending) setTimeout(() => send(pending), 0);
+      }}
+    />
+  );
 
   if (!msgs.length)
     return (
@@ -155,7 +166,7 @@ export default function Home() {
               read by the numbers.
             </h1>
             <p className="lead">Ask about any Indian mutual fund. Every answer is built from our data: resilience, consistency, momentum, returns and track record.</p>
-            <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
+            <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} />
             <ol className="prompts">
               {STARTERS.map((s, k) => (
                 <li key={s.q}>
@@ -173,6 +184,7 @@ export default function Home() {
           </div>
         </div>
         {disclaimer}
+        {authModal}
       </div>
     );
 
@@ -195,8 +207,8 @@ export default function Home() {
                   {m.role === "bot" ? (
                     // follow-up suggestions only under the latest answer
                     <Blocks blocks={m.blocks} onAsk={send} showFollowups={i === lastBot && !busy} />
-                  ) : m.role === "limit" ? (
-                    <Upgrade text={`${m.text} Come back tomorrow, or upgrade to Pro.`} />
+                  ) : m.role === "pro" ? (
+                    <ProCard me={me} onSignIn={() => setAuth({})} onInterested={refresh} />
                   ) : (
                     m.text
                   )}
@@ -216,8 +228,9 @@ export default function Home() {
           <div ref={end} />
         </div>
       </div>
-      <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} left={left} />
+      <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} />
       {disclaimer}
+      {authModal}
     </div>
   );
 }

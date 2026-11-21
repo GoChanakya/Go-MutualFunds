@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { readJson } from "@/lib/http";
 import { z } from "zod";
-import { REQUESTS_PER_IP_PER_DAY } from "@/lib/config/plans";
+import { ANON_QUESTIONS_PER_IP_PER_DAY, REQUESTS_PER_IP_PER_DAY, TRIAL_QUESTIONS } from "@/lib/config/plans";
 import { getStore } from "@/lib/data/store";
 import { execute } from "@/lib/engine/handlers";
+import { readJson } from "@/lib/http";
 import { parse } from "@/lib/intent";
 import { IntentSchema } from "@/lib/intent/schema";
 import type { ChatContext, ChatResponse } from "@/lib/types";
-import { clientIp, currentViewer } from "@/lib/users/auth";
+import { clientIp, identify, withAnonCookie } from "@/lib/users/auth";
 import { redact } from "@/lib/users/redact";
 import { users } from "@/lib/users/store";
 
@@ -31,19 +31,28 @@ export async function POST(req: Request) {
   if (!parsedBody.success) return NextResponse.json({ error: "bad request" }, { status: 400 });
   const { message, context } = parsedBody.data;
 
-  // Who is asking, and what their plan allows (enforced here, not in the UI).
-  const viewer = await currentViewer();
-  if (!viewer) return NextResponse.json({ error: "signin_required" }, { status: 401 });
-  const { user, plan } = viewer;
+  // Who is asking (signed-in user or visitor), and what their plan allows. Enforced here, not in the UI.
+  const id = await identify();
+  const { plan } = id;
   const store = users();
-  if (!(await store.ipGuard(clientIp(req), "requests", REQUESTS_PER_IP_PER_DAY)))
-    return NextResponse.json({ error: "Too many requests from this network today." }, { status: 429 });
-  const quota = await store.consume(user.uid, "chat", plan.chatPerDay);
-  if (!quota.allowed)
-    return NextResponse.json(
-      { error: "limit_reached", message: `You've used all ${quota.limit} questions for today.`, plan: plan.id, usage: { used: quota.used, limit: quota.limit } },
-      { status: 429 },
-    );
+  const ip = clientIp(req);
+  const reply = (body: unknown, status = 200) => withAnonCookie(NextResponse.json(body, { status }), id);
+
+  if (!(await store.ipGuard(ip, "requests", REQUESTS_PER_IP_PER_DAY))) return reply({ error: "Too many requests from this network today." }, 429);
+
+  if (plan.id === "pro") {
+    const q = await store.consume(id.key, "chat", plan.chatPerDay);
+    if (!q.allowed) return reply({ error: "daily_limit", message: `You've reached today's limit of ${q.limit} questions. It resets at midnight.` }, 429);
+  } else {
+    // Free: TRIAL_QUESTIONS in total. Visitors are also capped per network per day (new browsers don't get more).
+    if (id.kind === "anon") {
+      const used = await store.trialUsed(id.key);
+      if (used >= TRIAL_QUESTIONS) return reply({ error: "signup_required", reason: "trial" }, 402);
+      if (!(await store.ipGuard(ip, "anon_questions", ANON_QUESTIONS_PER_IP_PER_DAY))) return reply({ error: "signup_required", reason: "network" }, 402);
+    }
+    const q = await store.consumeTrial(id.key, TRIAL_QUESTIONS);
+    if (!q.allowed) return reply({ error: id.kind === "anon" ? "signup_required" : "upgrade_required", reason: "trial" }, 402);
+  }
 
   const ctx: ChatContext = { ...(context ?? {}), history: [...(context?.history ?? []), message].slice(-4) };
 
@@ -54,18 +63,17 @@ export async function POST(req: Request) {
     const body: ChatResponse = {
       blocks: result.blocks,
       context: result.context,
-      meta: { route, intent: intent.intent, as_of: data.asOf.nav, plan: plan.id, usage: { used: quota.used, limit: quota.limit } },
+      meta: { route, intent: intent.intent, as_of: data.asOf.nav, plan: plan.id },
     };
 
-    const safeQuestion = redact(message);
-    const event = { kind: "chat", question: safeQuestion, intent: intent.intent, route, llm_model: model ?? null, funds_shown: result.context.last_results ?? [] };
-    // History (not awaited: never slows the answer). Answers aren't stored; they can be regenerated from the data.
-    store.logEvent(user.uid, event).catch((e) => console.error(JSON.stringify({ type: "history_write_failed", error: String(e).slice(0, 200) })));
+    const event = { kind: "chat", question: redact(message), intent: intent.intent, route, llm_model: model ?? null, funds_shown: result.context.last_results ?? [] };
+    // History for signed-in users (not awaited: never slows the answer). Answers aren't stored.
+    if (id.kind === "user") store.logEvent(id.key, event).catch((e) => console.error(JSON.stringify({ type: "history_write_failed", error: String(e).slice(0, 200) })));
     // Analytics: one structured log line per question -> Cloud Logging -> BigQuery sink.
-    console.log(JSON.stringify({ type: "mf_event", uid: user.uid, plan: plan.id, ...event, intent_json: intent, answered: route !== "fallback", latency_ms: Date.now() - t0 }));
-    return NextResponse.json(body);
+    console.log(JSON.stringify({ type: "mf_event", who: id.kind, key: id.key, plan: plan.id, ...event, intent_json: intent, answered: route !== "fallback", latency_ms: Date.now() - t0 }));
+    return reply(body);
   } catch (e) {
     console.error(JSON.stringify({ type: "chat_error", error: String(e).slice(0, 500) }));
-    return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+    return reply({ error: "Something went wrong. Please try again." }, 500);
   }
 }

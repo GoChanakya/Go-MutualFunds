@@ -9,10 +9,12 @@ import { istDay, uidForPhone } from "./session";
 // User data lives in Firestore (Firebase project go-mutualfunds, asia-south1). Only this backend reads/writes it;
 // Firestore security rules deny all client access. For local dev without Firestore, an in-memory store is used.
 //
-//   users/{uid}                    phone, plan, plan_expires_at, consent_at, created_at, last_seen_at, created_ip
-//   usage/{uid}_{YYYY-MM-DD}       chat, screener (counters, IST day)
+//   users/{uid}                    phone, plan, plan_expires_at, consent_at, created_at, last_seen_at, created_ip, pro_interest_at
+//   usage/{key}_{YYYY-MM-DD}       chat, screener (daily counters, IST day; key = uid or anon id)
+//   trials/{key}                   used (lifetime free questions; key = uid or anon id)
+//   otp_codes/{uid}                hash, expiresAt, attempts, sentAt, windowStart, sends (WhatsApp sign-in)
 //   users/{uid}/events/{auto}      kind (chat|screener), question / filters, intent, funds_shown, ts
-//   guards/ip_{ip}_{day}           new_users, requests   (abuse limits while phones are unverified)
+//   guards/ip_{ip}_{day}           requests, anon_questions, otp_sends (abuse limits per network)
 
 export type UserDoc = {
   uid: string;
@@ -21,20 +23,33 @@ export type UserDoc = {
   plan_expires_at: string | null;
   created_at: string;
   consent_at: string;
+  pro_interest_at?: string;
 };
 
 export type Kind = "chat" | "screener";
 
 export type ConsumeResult = { allowed: boolean; used: number; limit: number };
 
+export type OtpRecord = { hash: string | null; expiresAt: number; attempts: number; sentAt: number; windowStart: number; sends: number };
+
+export type GuardField = "requests" | "anon_questions" | "otp_sends";
+
 export interface UserStore {
   upsertByPhone(phone: string, ip: string): Promise<{ user: UserDoc; created: boolean }>;
   get(uid: string): Promise<UserDoc | null>;
-  usage(uid: string): Promise<Record<Kind, number>>;
-  consume(uid: string, kind: Kind, limit: number): Promise<ConsumeResult>;
-  ipGuard(ip: string, field: "new_users" | "requests", limit: number, peek?: boolean): Promise<boolean>;
+  usage(key: string): Promise<Record<Kind, number>>;
+  consume(key: string, kind: Kind, limit: number): Promise<ConsumeResult>;
+  // lifetime free questions (visitor or signed-in free user)
+  trialUsed(key: string): Promise<number>;
+  consumeTrial(key: string, limit: number): Promise<ConsumeResult>;
+  // at sign-up, the visitor's count moves to the user (the higher of the two wins, so it never resets)
+  mergeTrial(fromKey: string, toKey: string): Promise<void>;
+  otpGet(uid: string): Promise<OtpRecord | null>;
+  otpSet(uid: string, rec: OtpRecord): Promise<void>;
+  ipGuard(ip: string, field: GuardField, limit: number, peek?: boolean): Promise<boolean>;
   logEvent(uid: string, event: Record<string, unknown>): Promise<void>;
   setPlan(uid: string, plan: PlanId, expiresAt: string | null): Promise<void>;
+  setProInterest(uid: string): Promise<void>;
 }
 
 export function effectivePlan(u: UserDoc | null): Plan {
@@ -97,7 +112,46 @@ class FirestoreUserStore implements UserStore {
     });
   }
 
-  async ipGuard(ip: string, field: "new_users" | "requests", limit: number, peek = false) {
+  async trialUsed(key: string) {
+    const snap = await this.db.collection("trials").doc(key).get();
+    return Number(snap.data()?.used ?? 0);
+  }
+
+  async consumeTrial(key: string, limit: number) {
+    const ref = this.db.collection("trials").doc(key);
+    return this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const used = Number(snap.data()?.used ?? 0);
+      if (used >= limit) return { allowed: false, used, limit };
+      tx.set(ref, { used: FieldValue.increment(1), updated_at: now() }, { merge: true });
+      return { allowed: true, used: used + 1, limit };
+    });
+  }
+
+  async mergeTrial(fromKey: string, toKey: string) {
+    const from = this.db.collection("trials").doc(fromKey);
+    const to = this.db.collection("trials").doc(toKey);
+    await this.db.runTransaction(async (tx) => {
+      const [a, b] = await Promise.all([tx.get(from), tx.get(to)]);
+      const used = Math.max(Number(a.data()?.used ?? 0), Number(b.data()?.used ?? 0));
+      tx.set(to, { used, updated_at: now(), merged_from: fromKey }, { merge: true });
+    });
+  }
+
+  async otpGet(uid: string) {
+    const snap = await this.db.collection("otp_codes").doc(uid).get();
+    return snap.exists ? (snap.data() as OtpRecord) : null;
+  }
+
+  async otpSet(uid: string, rec: OtpRecord) {
+    await this.db.collection("otp_codes").doc(uid).set(rec);
+  }
+
+  async setProInterest(uid: string) {
+    await this.db.collection("users").doc(uid).set({ pro_interest_at: now() }, { merge: true });
+  }
+
+  async ipGuard(ip: string, field: GuardField, limit: number, peek = false) {
     const ref = this.db.collection("guards").doc(`ip_${ipKey(ip)}_${istDay()}`);
     return this.db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -167,6 +221,32 @@ class MemoryUserStore implements UserStore {
     this.counters.set(k, used + 1);
     this.save();
     return { allowed: true, used: used + 1, limit };
+  }
+  private otps = new Map<string, OtpRecord>();
+  async trialUsed(key: string) {
+    return this.counters.get(`trial_${key}`) ?? 0;
+  }
+  async consumeTrial(key: string, limit: number) {
+    const used = this.counters.get(`trial_${key}`) ?? 0;
+    if (used >= limit) return { allowed: false, used, limit };
+    this.counters.set(`trial_${key}`, used + 1);
+    this.save();
+    return { allowed: true, used: used + 1, limit };
+  }
+  async mergeTrial(fromKey: string, toKey: string) {
+    this.counters.set(`trial_${toKey}`, Math.max(this.counters.get(`trial_${fromKey}`) ?? 0, this.counters.get(`trial_${toKey}`) ?? 0));
+    this.save();
+  }
+  async otpGet(uid: string) {
+    return this.otps.get(uid) ?? null;
+  }
+  async otpSet(uid: string, rec: OtpRecord) {
+    this.otps.set(uid, rec);
+  }
+  async setProInterest(uid: string) {
+    const u = this.users.get(uid);
+    if (u) this.users.set(uid, { ...u, pro_interest_at: now() } as UserDoc);
+    this.save();
   }
   async ipGuard(ip: string, field: string, limit: number, peek = false) {
     const k = `ip_${ip}_${istDay()}_${field}`;

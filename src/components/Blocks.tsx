@@ -93,29 +93,28 @@ function Overlap({ block }: { block: Extract<Block, { type: "overlap" }> }) {
           </span>
         </div>
       </div>
-      <div className="ov-chart" role="img" aria-label={`Sector overlap ${block.overlap_pct.toFixed(0)} percent between ${block.a} and ${block.b}`}>
+      <div className="ov-rows" role="img" aria-label={`Sector overlap ${block.overlap_pct.toFixed(0)} percent between ${block.a} and ${block.b}`}>
         {block.rows.map((r, k) => {
           const common = Math.min(r.a, r.b);
           const extra = Math.abs(r.a - r.b);
           const side = r.a > r.b ? "a" : "b";
           return (
-            <div className="ov-col" key={k} title={`${r.label}: ${block.a} ${r.a.toFixed(1)}%, ${block.b} ${r.b.toFixed(1)}%, common ${common.toFixed(1)}%`}>
-              <div className="ov-val">
-                {r.a.toFixed(1)}
-                <span>/</span>
-                {r.b.toFixed(1)}
+            <div className="ov-row" key={k} title={`${r.label}: ${block.a} ${r.a.toFixed(1)}%, ${block.b} ${r.b.toFixed(1)}%, common ${common.toFixed(1)}%`}>
+              <span className="ov-label">{r.label}</span>
+              <div className="ov-track">
+                {common > 0 && <i className="ov-common" style={{ width: `${(common / max) * 100}%` }} />}
+                {extra > 0.05 && <i className={`ov-extra ${side}`} style={{ width: `${(extra / max) * 100}%` }} />}
               </div>
-              <div className="ov-bar">
-                {extra > 0.05 && <i className={`ov-extra ${side}`} style={{ height: `${(extra / max) * 100}%` }} />}
-                {common > 0 && <i className="ov-common" style={{ height: `${(common / max) * 100}%` }} />}
-              </div>
-              <div className="ov-label">{r.label}</div>
+              <span className="ov-vals">
+                <b className="a">{r.a.toFixed(1)}</b>
+                <b className="b">{r.b.toFixed(1)}</b>
+              </span>
             </div>
           );
         })}
       </div>
       <div className="ov-foot sub">
-        Numbers above each column: {block.a} / {block.b}, % of portfolio. Overlap % adds up the common part of every sector.
+        % of each portfolio. The hatched part is held by both funds; Overlap % adds up the hatched parts.
       </div>
     </div>
   );

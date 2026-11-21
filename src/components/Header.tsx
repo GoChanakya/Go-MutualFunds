@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import type { MeResponse } from "@/lib/users/me-types";
 import { LogoMark } from "./ui";
 
-export function Header({ me, onSignOut, usageKind = "chat" }: { me: MeResponse | null | undefined; onSignOut: () => void; usageKind?: "chat" | "screener" }) {
+// No usage counts here: limits are enforced on the server and the UI only reacts when one is reached.
+export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined; onSignIn: () => void; onSignOut: () => void }) {
   const path = usePathname();
-  const left = me ? Math.max(0, me.limits[usageKind] - me.used[usageKind]) : null;
   return (
     <header className="topbar">
       <Link href="/" className="brand">
@@ -26,27 +26,34 @@ export function Header({ me, onSignOut, usageKind = "chat" }: { me: MeResponse |
       </nav>
       {me && (
         <div className="account">
-          <span className={`plan ${me.plan}`}>{me.plan === "pro" ? "Pro" : "Free"}</span>
-          <span className="usage hide-sm" title={`${me.used[usageKind]} used of ${me.limits[usageKind]} today`}>
-            {left} {usageKind === "chat" ? "questions" : "searches"} left
-          </span>
-          <button className="ghost" onClick={onSignOut} title={`Signed in as ${me.phone}`}>
-            Sign out
-          </button>
+          {me.signed_in ? (
+            <>
+              {me.plan === "pro" && <span className="plan pro">Pro</span>}
+              <span className="usage hide-sm">{me.phone}</span>
+              <button className="ghost" onClick={onSignOut}>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <button className="textbtn strong" onClick={onSignIn}>
+              Sign in
+            </button>
+          )}
         </div>
       )}
     </header>
   );
 }
 
+// Screener: free users see the top results only.
 export function Upgrade({ text }: { text: string }) {
   return (
     <div className="upgrade">
       <div>
         <b>{text}</b>
-        <p>Pro unlocks every fund, every data point, sector allocation and 200 questions a day.</p>
+        <p>Pro (₹400/month) unlocks every fund, every data point, sector allocation and 200 questions a day.</p>
       </div>
-      <span className="soon">Pro plans coming soon</span>
+      <span className="soon">Launching soon</span>
     </div>
   );
 }

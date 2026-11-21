@@ -3,31 +3,40 @@
 import { useCallback, useEffect, useState } from "react";
 import type { MeResponse } from "@/lib/users/me-types";
 
-// Current user (phone sign-in, plan, today's usage). null = not signed in, undefined = still loading.
+// Current visitor/user. undefined = loading. Visitors get { signed_in: false }.
 export function useMe() {
-  const [me, setMe] = useState<MeResponse | null | undefined>(undefined);
+  const [me, setMe] = useState<MeResponse | undefined>(undefined);
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/me", { cache: "no-store" });
-    setMe(res.ok ? ((await res.json()) as MeResponse) : null);
+    if (res.ok) setMe((await res.json()) as MeResponse);
   }, []);
 
   useEffect(() => {
-    refresh().catch(() => setMe(null));
+    refresh().catch(() => setMe({ signed_in: false, phone: null, plan: "free", plan_expires_at: null, pro_interest: false }));
   }, [refresh]);
-
-  const signIn = useCallback(async (phone: string, consent: boolean): Promise<string | null> => {
-    const res = await fetch("/api/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ phone, consent }) });
-    const data = await res.json();
-    if (!res.ok) return data.error ?? "Could not sign in";
-    setMe(data as MeResponse);
-    return null;
-  }, []);
 
   const signOut = useCallback(async () => {
     await fetch("/api/session", { method: "DELETE" });
-    setMe(null);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
-  return { me, setMe, refresh, signIn, signOut };
+  return { me, setMe, refresh, signOut };
+}
+
+// WhatsApp OTP calls. requestOtp returns an error message or null.
+export async function requestOtp(phone: string): Promise<string | null> {
+  const res = await fetch("/api/auth/send-otp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ phone }) });
+  if (res.ok) return null;
+  return ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Could not send the OTP.";
+}
+
+export async function confirmOtp(phone: string, otp: string): Promise<{ me?: MeResponse; error?: string }> {
+  const res = await fetch("/api/auth/verify-otp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ phone, otp, consent: true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? { me: data as MeResponse } : { error: (data as { error?: string }).error ?? "Could not verify the OTP." };
 }

@@ -9,3 +9,7 @@ next-env.d.ts
 *.parquet
 data-cache/
 .env
+
+# reference code from other projects (contains secrets); never commit
+reference/
+*service-account*.json
