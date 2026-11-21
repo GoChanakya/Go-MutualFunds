@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { clearLegacyCookies } from "@/lib/users/auth";
 import { SESSION_COOKIE } from "@/lib/users/session";
 
 export const runtime = "nodejs";
@@ -13,5 +14,5 @@ export async function POST() {
 export async function DELETE() {
   const res = NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
-  return res;
+  return clearLegacyCookies(res);
 }

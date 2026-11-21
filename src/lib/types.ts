@@ -22,10 +22,33 @@ export type FundRow = {
 
 export type Fact = { label: string; value: string; hint?: string };
 
+// Rich fund page (chat "tell me about X" and the screener's analysis tab). Every number comes from our data.
+export type CrashRow = {
+  name: string;
+  dates: string;
+  fall: number | null; // % fall during the event
+  recovered_months: number | null;
+  status: "ok" | "not_recovered" | "launched_after" | "no_data";
+};
+export type FundDetailView = {
+  fund: FundRow;
+  kind: string; // "Active" / "Passive"
+  peers_n: number;
+  verdict: { tone: "good" | "neutral" | "weak"; label: string; text: string };
+  standout: { good: string[]; watch: string[] };
+  returns: { label: string; fund: number | null; cat: number | null }[];
+  consistency: { beat: number; of: number; months: { label: string; beat: boolean }[]; badge: string; cat_median: number | null } | null;
+  sip: { monthly: number; invested: number; value: number; gain: number; gain_pct: number; started: string; instalments: number; cat_gain_pct: number | null } | null;
+  rank: { now: number; of: number; history: { label: string; rank: number; of: number }[]; change_3m: number | null; badge: "Moving up" | "Slipping" | "Steady" } | null;
+  recovery: { months: number | null; cat_months: number | null; summary: string; crashes: CrashRow[] } | null;
+  better_peers: { name: string; score: number }[];
+};
+
 export type Block =
   | { type: "text"; text: string }
   | { type: "fund_table"; title: string; rows: FundRow[] }
   | { type: "fund_card"; fund: FundRow; facts: Fact[]; more: Fact[]; strengths: string[]; watch: string[] }
+  | { type: "fund_detail"; d: FundDetailView }
   | { type: "facts"; facts: Fact[] }
   | { type: "heading"; text: string }
   | { type: "bullets"; items: string[] }

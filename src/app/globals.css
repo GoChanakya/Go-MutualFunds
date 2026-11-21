@@ -1,7 +1,7 @@
 /* =========================================================
    GoMutualFunds — editorial fintech
    Syne (display) · Manrope (text) · IBM Plex Mono (labels, figures)
-   Paper + ink, one lime accent used as a fill (never as text colour).
+   Paper + ink, one brand orange: a fill on buttons and highlights; --accent-ink when orange is used as text.
    ========================================================= */
 
 :root {
@@ -14,6 +14,7 @@
   --line-2: #c9c3b6;
   --accent:  #ff8500;
   --accent-soft: #ffe3c2;
+  --accent-ink: #b35400; /* orange as text on paper, readable */
   --on-accent: #141412;
   --good: #1d7a4b;
   --bad: #c0392b;
@@ -33,7 +34,8 @@
     --muted: #8f8a7f;
     --line: #2a2926;
     --line-2: #3d3b37;
-    --accent-soft: rgba(214, 240, 74, 0.14);
+    --accent-soft: rgba(255, 133, 0, 0.14);
+    --accent-ink: #ff9a2e;
     --good: #5fd38d;
     --bad: #ff7a66;
     --mid: #e6b450;
@@ -88,6 +90,8 @@ button:disabled { cursor: default; }
 }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-family: var(--display); font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
 .brand b { font-weight: 600; }
+.go { color: var(--accent-ink); font-weight: 700; }
+.foot-brand .go { color: var(--accent); }
 .mark { display: inline-grid; place-items: center; flex: none; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-family: var(--display); font-weight: 700; line-height: 1; padding-bottom: 0.12em; }
 .tabs { display: flex; gap: 22px; }
 .tabs a { color: var(--muted); text-decoration: none; font-size: 14.5px; font-weight: 600; padding: 4px 0; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
@@ -193,10 +197,16 @@ button:disabled { cursor: default; }
 .figure.weak .figure-rule i { background: var(--bad); }
 
 .pillars { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
-.pillars.compact { gap: 8px; min-width: 220px; }
+/* compact (ranked list): one small row per pillar so full names fit: name | bar | score */
+.pillars.compact { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+.pillars.compact .pillar { display: grid; grid-template-columns: 86px minmax(0, 1fr) 24px; grid-template-areas: "l t v"; align-items: center; gap: 8px; }
+.pillars.compact .pillar-head { display: contents; }
+.pillars.compact .pillar-head span { grid-area: l; white-space: nowrap; }
+.pillars.compact .pillar-head b { grid-area: v; text-align: right; }
+.pillars.compact .pillar-track { grid-area: t; margin-top: 0; }
 .pillar-head { display: flex; justify-content: space-between; gap: 4px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--muted); }
 .pillar-head b { color: var(--ink); font-weight: 500; }
-.pillars.compact .pillar-head { font-size: 10px; text-transform: uppercase; }
+.pillars.compact .pillar-head { font-size: 11px; }
 .pillar-track { height: 3px; background: var(--line); margin-top: 5px; border-radius: 2px; overflow: hidden; }
 .pillar-track i { display: block; height: 100%; background: var(--muted); }
 .pillar-track i.good { background: var(--good); }
@@ -371,9 +381,17 @@ td.best { font-weight: 700; background: var(--accent-soft); }
 .textbtn.strong:hover svg { transform: translateX(3px); }
 .textbtn svg { transition: transform .2s; }
 
-.upgrade { display: flex; gap: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 18px 20px; border-radius: var(--r); background: var(--ink); color: var(--paper); }
-.upgrade b { font-family: var(--display); font-size: 15.5px; font-weight: 600; }
-.upgrade p { margin: 3px 0 0; opacity: .7; font-size: 13.5px; }
+.upgrade {
+  display: flex; gap: 18px 28px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 20px 22px; border-radius: 14px;
+  background: linear-gradient(120deg, var(--accent-soft), transparent 55%), var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--ink);
+}
+.upgrade > div:first-child { flex: 1 1 320px; min-width: 0; }
+.upgrade b { font-family: var(--display); font-size: 16px; font-weight: 600; }
+.upgrade p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; }
+.upgrade-cta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; text-align: right; }
+.upgrade-cta .sub { margin: 0; font-size: 12px; }
+.sub a, .pro-card a { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--line-2); }
+.sub a:hover, .pro-card a:hover { color: var(--ink); text-decoration-color: currentColor; }
 .upgrade .soon { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; background: var(--accent); color: var(--on-accent); padding: 4px 9px; border-radius: 4px; }
 
 /* ---------- sign-in ---------- */
@@ -384,7 +402,8 @@ td.best { font-weight: 700; background: var(--accent-soft); }
 .signin .composer .sub { font-family: var(--mono); padding-bottom: 7px; }
 .consent { font-size: 13px; color: var(--muted); display: flex; gap: 10px; align-items: flex-start; }
 .consent input { accent-color: var(--ink); margin-top: 3px; }
-.primary { border: 0; border-radius: 10px; padding: 12px 18px; background: var(--ink); color: var(--paper); font-weight: 700; transition: transform .15s; }
+.primary { border: 0; border-radius: 10px; padding: 12px 18px; background: var(--accent); color: var(--on-accent); font-weight: 700; transition: transform .15s, filter .15s; }
+.primary:hover:not(:disabled) { filter: brightness(1.06); }
 .primary:hover:not(:disabled) { transform: translateY(-1px); }
 .primary:disabled { opacity: .3; }
 
@@ -414,7 +433,10 @@ td.best { font-weight: 700; background: var(--accent-soft); }
 .page-head h1 span { color: var(--muted); font-weight: 500; }
 .toolbar { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--ink); }
 .sort { display: flex; align-items: center; gap: 8px; }
-.sort select { font: inherit; font-size: 14px; font-weight: 600; background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid var(--line-2); padding: 4px 2px; cursor: pointer; }
+.sort select { font: inherit; font-size: 14px; font-weight: 600; background-color: var(--paper); color: var(--ink); border: 0; border-bottom: 1px solid var(--line-2); padding: 4px 2px; cursor: pointer; color-scheme: inherit; }
+.sort select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* the open dropdown list: without explicit colours Windows shows light text on a grey list in dark mode */
+select option { background-color: var(--surface); color: var(--ink); }
 .active-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .empty-state { display: flex; flex-direction: column; gap: 4px; padding: 40px; text-align: center; border: 1px dashed var(--line-2); border-radius: var(--r); }
 

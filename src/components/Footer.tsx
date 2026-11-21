@@ -22,7 +22,8 @@ export function SiteFooter() {
             <Link href="/" className="foot-brand">
               <LogoMark size={30} />
               <span>
-                Go<b>MutualFunds</b>
+                <span className="go">Go</span>
+                <b>MutualFunds</b>
               </span>
             </Link>
             <p>Mutual funds, read by the numbers. Scores, comparisons and portfolios for every Indian mutual fund.</p>
@@ -42,9 +43,9 @@ export function SiteFooter() {
 
           <nav className="foot-col" aria-label="Product">
             <h4>Product</h4>
-            <Link href="/">Ask a question</Link>
+            <Link href="/ask">Ask a question</Link>
             <Link href="/screener">Fund screener</Link>
-            <span className="foot-muted">Pro · launching soon</span>
+            <Link href="/#pricing">Pro · ₹400/month</Link>
           </nav>
 
           <nav className="foot-col" aria-label="Legal">

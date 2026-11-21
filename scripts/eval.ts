@@ -111,6 +111,20 @@ function summarize(b: Block): string {
       return `  table[${b.title}]:\n` + b.rows.map((r, i) => `    ${i + 1}. ${r.name} | score ${r.score?.toFixed(0)} | ${JSON.stringify(Object.values(r.pillars).map((v) => (v === null ? null : Math.round(v))))}`).join("\n");
     case "fund_card":
       return `  card: ${b.fund.name} score ${b.fund.score?.toFixed(0)}\n` + b.facts.map((f) => `    ${f.label}: ${f.value}${f.hint ? ` (${f.hint})` : ""}`).join("\n") + `\n    + ${b.strengths.join(" | ")}\n    - ${b.watch.join(" | ")}`;
+    case "fund_detail": {
+      const d = b.d;
+      return [
+        `  detail: ${d.fund.name} score ${d.fund.score?.toFixed(0)} · ${d.verdict.label}`,
+        `    + ${d.standout.good.join(" | ")}`,
+        `    - ${d.standout.watch.join(" | ")}`,
+        `    returns: ${d.returns.map((r) => `${r.label} ${r.fund?.toFixed(1)} (cat ${r.cat?.toFixed(1)})`).join(", ")}`,
+        d.consistency ? `    consistency: ${d.consistency.beat}/${d.consistency.of} ${d.consistency.badge} ${d.consistency.months.map((m) => (m.beat ? "●" : "○")).join("")}` : "    consistency: -",
+        d.sip ? `    sip: ${d.sip.invested} -> ${Math.round(d.sip.value)} (${d.sip.gain_pct.toFixed(1)}%) from ${d.sip.started}, ${d.sip.instalments} instalments` : "    sip: -",
+        d.rank ? `    rank: #${d.rank.now}/${d.rank.of} ${d.rank.badge}; ${d.rank.history.map((h) => `${h.label} #${h.rank}`).join(" ")}; 3m change ${d.rank.change_3m}` : "    rank: -",
+        d.recovery ? `    recovery: ${d.recovery.summary} | ${d.recovery.crashes.map((c) => `${c.name}: ${c.status} ${c.fall ?? ""}/${c.recovered_months ?? ""}`).join("; ")}` : "    recovery: -",
+        `    better: ${d.better_peers.map((p) => `${p.name} ${p.score}`).join(", ")}`,
+      ].join("\n");
+    }
     case "holdings":
       return `  holdings [${b.title}]: ` + b.rows.slice(0, 6).map((r) => `${r.label} ${r.pct}%`).join(", ");
     case "overlap":

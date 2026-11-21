@@ -1,0 +1,10 @@
+{
+  "hosting": {
+    "site": "gomutualfunds",
+    "public": "firebase-public",
+    "ignore": ["firebase.json", "**/.*"],
+    "rewrites": [
+      { "source": "**", "run": { "serviceId": "gomf-app", "region": "asia-south1", "pinTag": false } }
+    ]
+  }
+}

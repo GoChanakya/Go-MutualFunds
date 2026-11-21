@@ -6,7 +6,7 @@ import { PILLARS } from "@/lib/config/score";
 import { query } from "@/lib/data/store";
 import type { AllocRow, FundDetail, ScreenerCard, ScreenerResult } from "@/lib/screener-types";
 import { num } from "./format";
-import { profileInsights } from "./insights";
+import { fundDetailView } from "./detail";
 
 // MF screener. Filters are a strict whitelist; SQL is built only from validated values.
 // Plan limits are applied HERE: free users get the top N rows and only a few fields. Locked fields are never sent.
@@ -132,7 +132,7 @@ export async function fundDetail(code: string): Promise<FundDetail | null> {
   const [row] = await query<Row>(`SELECT * FROM universe WHERE scheme_code = ${q(code)}`);
   if (!row) return null;
   const card = toCard(row, true);
-  const ins = await profileInsights(row, {
+  const view = await fundDetailView(row, {
     code: card.code,
     name: card.name,
     group: card.category,
@@ -153,7 +153,7 @@ export async function fundDetail(code: string): Promise<FundDetail | null> {
   const fmtAmt = (v: unknown) => (num(v) ? `₹${Number(v).toLocaleString("en-IN")}` : "-");
   return {
     code,
-    analysis: [...(ins.verdict ? [ins.verdict] : []), ...ins.analysis, ...ins.peers],
+    analysis: [{ type: "fund_detail", d: view }],
     allocation: {
       period: p ? `${p.base_period} → ${p.period}` : null,
       sectors: pick("sector", 12),

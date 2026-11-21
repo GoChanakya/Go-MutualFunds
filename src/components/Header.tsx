@@ -15,11 +15,12 @@ export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined
       <Link href="/" className="brand">
         <LogoMark />
         <span>
-          Go<b>MutualFunds</b>
+          <span className="go">Go</span>
+          <b>MutualFunds</b>
         </span>
       </Link>
       <nav className="tabs" aria-label="Sections">
-        <Link href="/" className={path === "/" ? "active" : ""}>
+        <Link href="/ask" className={path?.startsWith("/ask") ? "active" : ""}>
           Ask
         </Link>
         <Link href="/screener" className={path?.startsWith("/screener") ? "active" : ""}>
@@ -55,7 +56,9 @@ export function Upgrade({ text, me, onSignIn, onUpgraded }: { text: string; me: 
         <b>{text}</b>
         <p>Pro (₹400/month) unlocks every fund, every data point, sector allocation and 200 questions a day.</p>
       </div>
-      <SubscribeButton me={me} onSignIn={onSignIn} onUpgraded={onUpgraded} />
+      <div className="upgrade-cta">
+        <SubscribeButton me={me} onSignIn={onSignIn} onUpgraded={onUpgraded} />
+      </div>
     </div>
   );
 }

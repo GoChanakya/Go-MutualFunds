@@ -1,11 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Manrope, Syne } from "next/font/google";
 import "./globals.css";
+import "./pages.css";
+import "./landing.css";
 
 // Self-hosted at build time by Next.js (no requests to Google from the browser, so the CSP stays 'self').
 const display = Syne({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-display", display: "swap" });
 const body = Manrope({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-body", display: "swap" });
 const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono", display: "swap" });
+
+// Pages render per request (Cache-Control: private, no-store). Behind Firebase Hosting's CDN a cached page would
+// keep pointing at the previous deploy's script files, which the new revision no longer serves. Pages are light, so
+// this costs little. Hashed files under /_next/static are still cached long-term.
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "GoMutualFunds",

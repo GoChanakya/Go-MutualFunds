@@ -3,6 +3,7 @@
 import { Fragment } from "react";
 import type { Block, Fact, FundRow } from "@/lib/types";
 import { Arrow, Delta, PillarBars, Score, ScoreRing, cr, pct, r0 } from "./ui";
+import { FundDetail } from "./FundDetail";
 
 // **bold** only; everything else is plain text.
 function Rich({ text }: { text: string }) {
@@ -162,7 +163,8 @@ function FundList({ rows, onAsk }: { rows: FundRow[]; onAsk: (q: string) => void
   );
 }
 
-export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAsk: (q: string) => void; showFollowups: boolean }) {
+// embedded: shown inside a screener card, which already has the fund's name and score
+export function Blocks({ blocks, onAsk, showFollowups, embedded = false }: { blocks: Block[]; onAsk: (q: string) => void; showFollowups: boolean; embedded?: boolean }) {
   return (
     <>
       {blocks.map((b, i) => {
@@ -215,6 +217,8 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
             );
           case "bars":
             return <Bars key={i} block={b} />;
+          case "fund_detail":
+            return <FundDetail key={i} d={b.d} onAsk={onAsk} embedded={embedded} />;
           case "fund_card":
             return (
               <div key={i} className="panel fund-head">

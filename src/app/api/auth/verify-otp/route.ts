@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { readJson } from "@/lib/http";
-import { anonIdFromCookie, clientIp, cookieOpts } from "@/lib/users/auth";
+import { anonIdFromCookie, clearLegacyCookies, clientIp, cookieOpts } from "@/lib/users/auth";
 import { meBody } from "@/lib/users/me";
 import { AuthError, tenDigits, verifyOtp } from "@/lib/users/otp";
-import { ANON_COOKIE, SESSION_COOKIE, SESSION_DAYS, createSessionToken } from "@/lib/users/session";
+import { SESSION_COOKIE, SESSION_DAYS, createSessionToken } from "@/lib/users/session";
 import { users } from "@/lib/users/store";
 
 export const runtime = "nodejs";
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   console.log(JSON.stringify({ type: "signed_in", uid: user.uid, created, carried_trial_from: anonId ?? null }));
 
   const res = NextResponse.json(meBody(user));
+  // replaces the visitor token in the same cookie
   res.cookies.set(SESSION_COOKIE, createSessionToken(user.uid), cookieOpts(SESSION_DAYS));
-  res.cookies.set(ANON_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
-  return res;
+  return clearLegacyCookies(res);
 }

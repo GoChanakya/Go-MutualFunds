@@ -13,3 +13,7 @@ data-cache/
 # reference code from other projects (contains secrets); never commit
 reference/
 *service-account*.json
+
+# Firebase CLI
+firebase-debug.log
+.firebase/

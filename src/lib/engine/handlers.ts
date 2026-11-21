@@ -7,7 +7,8 @@ import { getStore, query } from "@/lib/data/store";
 import type { FundMetric, Intent, RankIntent } from "@/lib/intent/schema";
 import type { Block, ChatContext, Fact, FundRow, ShiftRow } from "@/lib/types";
 import { fmtCr, fmtInr, fmtMonths, fmtPct, fmtScore, fmtYears, num } from "./format";
-import { catStats, compareInsights, profileInsights, rankInsights, returnBars } from "./insights";
+import { catStats, compareInsights, rankInsights, returnBars } from "./insights";
+import { fundDetailView } from "./detail";
 import { monthLabel, monthlyBars, monthlyView } from "./monthly";
 import { sectorOverlapBlocks, stockOverlapBlocks } from "./overlap";
 import { resolveStock } from "@/lib/data/stocks";
@@ -192,36 +193,6 @@ async function fundProfile(ref: string, ctx: ChatContext): Promise<Result> {
   const [row] = await fundsByCodes([r.code]);
   if (!row) return notFound([], ctx);
   const fund = toFundRow(row);
-  const [cat] = await query<Row>(`SELECT median(ret_1y_pct) AS med_1y FROM universe WHERE grp = ${q(String(row.grp))}`);
-
-  const facts: Fact[] = [
-    { label: "1-year return", value: fmtPct(row.ret_1y_pct), hint: `category median ${fmtPct(cat?.med_1y)}` },
-    { label: "Consistency", value: num(row.batting_months) ? `beat category ${row.months_beat} of ${row.batting_months} months` : "-" },
-    {
-      label: "Momentum",
-      value: num(row.rank_now) ? `rank ${row.rank_now} of ${row.rank_total_now}` : "-",
-      hint: num(row.places_climbed_6m) ? `${Number(row.places_climbed_6m) >= 0 ? "climbed" : "slipped"} ${Math.abs(Number(row.places_climbed_6m))} place${Math.abs(Number(row.places_climbed_6m)) === 1 ? "" : "s"} in 6 months` : undefined,
-    },
-    { label: "Typical recovery after falls", value: fmtMonths(row.typical_recovery_months), hint: `category ${fmtMonths(row.category_typical_recovery_months)}` },
-    { label: "Fund size", value: fmtCr(row.aum_lakhs) },
-    { label: "Fund age", value: fmtYears(row.fund_age_years) },
-  ];
-  const more: Fact[] = [
-    {
-      label: "Covid 2020 crash",
-      value: num(row.covid_2020_fall_pct) !== null ? `fell ${Number(row.covid_2020_fall_pct).toFixed(1)}%` : "-",
-      hint: num(row.covid_2020_recovery_months) !== null ? `recovered in ${fmtMonths(row.covid_2020_recovery_months)}` : undefined,
-    },
-    { label: "₹5,000/month SIP for 3 years", value: num(row.sip_value) ? `${fmtInr(row.sip_invested)} → ${fmtInr(row.sip_value)}` : "-" },
-    { label: "3-month / 6-month return", value: `${fmtPct(row.ret_3m_pct)} / ${fmtPct(row.ret_6m_pct)}` },
-    { label: "Type", value: `${String(row.active_passive ?? "-")} · ${row.n_peers} funds in category` },
-    { label: "NAV", value: num(row.nav) !== null ? `₹${Number(row.nav).toFixed(2)}` : "-", hint: row.nav_date ? `as of ${row.nav_date}` : undefined },
-  ];
-
-  const strengths = strongPillars(fund, 70).map((p) => `${PILLAR_LABEL[p]}: ${pillarEvidence(p, row)}`);
-  const watch = weakPillars(fund, 30).map((p) => `${PILLAR_LABEL[p]}: ${pillarEvidence(p, row)}`);
-  if ((num(row.places_climbed_6m) ?? 0) <= -5) watch.push(`Momentum slipping: down ${Math.abs(Number(row.places_climbed_6m))} places in its category over 6 months`);
-  if ((fund.age_years ?? 99) < 3) watch.push("Young fund: less than 3 years of history, so scores are less reliable");
 
   const [leader] = await query<Row>(
     `SELECT name FROM universe WHERE grp = ${q(String(row.grp))} AND scheme_code <> ${q(fund.code)} AND score_balanced IS NOT NULL ORDER BY score_balanced DESC LIMIT 1`,
@@ -229,14 +200,7 @@ async function fundProfile(ref: string, ctx: ChatContext): Promise<Result> {
   const opts = [`Best ${groupName(String(row.grp))} funds`];
   if (leader) opts.push(`Compare ${fund.name} vs ${leader.name}`);
   opts.push(`Where does ${fund.name} invest?`);
-  const ins = await profileInsights(row, fund);
-  const blocks: Block[] = [
-    ...(ins.verdict ? [ins.verdict] : []),
-    { type: "fund_card", fund, facts, more, strengths: [], watch },
-    ...ins.analysis,
-    ...ins.peers,
-    { type: "choices", text: "", options: opts },
-  ];
+  const blocks: Block[] = [{ type: "fund_detail", d: await fundDetailView(row, fund) }, { type: "choices", text: "", options: opts }];
   return { blocks, context: { ...ctx, last_intent: { intent: "fund_profile", fund: "result:1" }, last_results: [fund.code] } };
 }
 

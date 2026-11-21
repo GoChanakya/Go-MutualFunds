@@ -34,7 +34,11 @@ const nextConfig: NextConfig = {
   // native DuckDB bindings must not be bundled
   serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"],
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // API answers are per user: never cached by Firebase Hosting's CDN or any proxy
+      { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
+    ];
   },
 };
 

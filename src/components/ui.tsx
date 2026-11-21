@@ -56,7 +56,7 @@ export function PillarBars({ pillars, compact = false }: { pillars: Record<strin
         return (
           <div className="pillar" key={k} title={`${label}: ${r0(v)} of 100 vs category`}>
             <div className="pillar-head">
-              <span>{compact ? label.slice(0, 3) : label}</span>
+              <span>{label}</span>
               <b>{r0(v)}</b>
             </div>
             <div className="pillar-track">
@@ -80,7 +80,7 @@ export function Delta({ value, suffix = "%" }: { value: number | null | undefine
   );
 }
 
-// 12 ticks: months the fund beat its category (batting average).
+// 12 ticks: months the fund beat similar funds (its category average).
 export function BattingDots({ beat, of }: { beat: number; of: number }) {
   return (
     <span className="ticks" title={`Beat its category in ${beat} of ${of} months`}>

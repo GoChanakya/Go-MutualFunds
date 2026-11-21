@@ -1,15 +1,17 @@
 import "server-only";
 import crypto from "node:crypto";
 
-// Two signed cookies; the client can't forge either.
-//   gomf_session = "<uid>.<issuedAt>.<hmac>"  issued only after the WhatsApp OTP verifies the number
-//   gomf_anon    = "<anonId>.<issuedAt>.<hmac>"  a visitor without a login, so their free questions are counted on our server
+// One signed cookie, "__session" (Firebase Hosting forwards only a cookie with exactly this name to Cloud Run).
+// It holds ONE of two tokens; the client can't forge either:
+//   user token = "<uid>.<issuedAt>.<hmac>"     issued only after the WhatsApp OTP verifies the number
+//   anon token = "<anonId>.<issuedAt>.<hmac>"  a visitor without a login, so their free questions are counted on our server
 // Each kind is signed with its own prefix, so one can never be passed off as the other.
 
-export const SESSION_COOKIE = "gomf_session";
+export const SESSION_COOKIE = "__session";
 export const SESSION_DAYS = 90;
-export const ANON_COOKIE = "gomf_anon";
 export const ANON_DAYS = 365;
+// Read-only fallback for browsers that still carry the old cookies (direct run.app visits before the switch).
+export const LEGACY_COOKIES = { user: "gomf_session", anon: "gomf_anon" } as const;
 
 let devSecretWarned = false;
 function secret(): string {

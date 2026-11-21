@@ -41,7 +41,7 @@ const AUM_LABEL = { small: "Under ₹1,000 Cr", mid: "₹1,000–10,000 Cr", lar
 const SORTS: [string, string][] = [
   ["score", "Our score"],
   ["ret_1y", "1-year return"],
-  ["batting", "Batting average"],
+  ["batting", "Months beating similar funds"],
   ["resilience", "Resilience"],
   ["consistency", "Consistency"],
   ["momentum", "Momentum"],
@@ -179,7 +179,7 @@ export default function ScreenerPage() {
       </div>
 
       <div className="fgroup">
-        <div className="flabel">Beat category (batting average)</div>
+        <div className="flabel">Months it beat similar funds</div>
         {seg(f.min_batting, [[0, "Any"], [6, "6+/12"], [8, "8+/12"], [10, "10+/12"]], (v) => set("min_batting", v))}
         <label className="check">
           <input type="checkbox" checked={f.beat_category_1y} onChange={(e) => set("beat_category_1y", e.target.checked)} /> 1-year return above category median
@@ -277,7 +277,7 @@ export default function ScreenerPage() {
               canPick={picked.length < 3}
               onPick={() => pick(c)}
               onOpen={() => loadDetail(c.code)}
-              onAsk={() => router.push(`/?q=${encodeURIComponent(`Tell me about ${c.name}`)}`)}
+              onAsk={() => router.push(`/ask?q=${encodeURIComponent(`Tell me about ${c.name}`)}`)}
             />
           ))}
 
@@ -303,7 +303,7 @@ export default function ScreenerPage() {
           <button
             className="primary"
             disabled={picked.length < 2}
-            onClick={() => router.push(`/?q=${encodeURIComponent(`Compare ${picked.map((p) => p.name).join(" vs ")}`)}`)}
+            onClick={() => router.push(`/ask?q=${encodeURIComponent(`Compare ${picked.map((p) => p.name).join(" vs ")}`)}`)}
           >
             Compare in chat
           </button>
@@ -344,6 +344,7 @@ function FundCard({
   onOpen: () => void;
   onAsk: () => void;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"analysis" | "portfolio" | "details">("analysis");
   const loaded = detail && detail !== "loading" && detail !== "error" ? detail : null;
@@ -374,14 +375,14 @@ function FundCard({
           </span>
         </div>
         <div className="stat">
-          <span className="tile-l">Batting average</span>
+          <span className="tile-l">Beat similar funds</span>
           <span className="tile-v">{c.batting ? `${c.batting.beat}/${c.batting.of} months` : "–"}</span>
           {c.batting && <BattingDots beat={c.batting.beat} of={c.batting.of} />}
         </div>
         {pro && (
           <>
             <div className="stat">
-              <span className="tile-l">Momentum</span>
+              <span className="tile-l">Rank among similar funds</span>
               <span className="tile-v">{c.momentum ? `#${c.momentum.rank} of ${c.momentum.of}` : "–"}</span>
               {c.momentum?.climbed_6m ? (
                 <span className={`tile-h ${c.momentum.climbed_6m > 0 ? "pos" : "neg"}`}>
@@ -390,16 +391,16 @@ function FundCard({
               ) : null}
             </div>
             <div className="stat">
-              <span className="tile-l">Recovery after falls</span>
+              <span className="tile-l">Time to recover from falls</span>
               <span className="tile-v">{c.recovery_months == null ? "–" : `${c.recovery_months.toFixed(1)} mo`}</span>
               {c.category_recovery_months != null && <span className="tile-h">category {c.category_recovery_months.toFixed(1)} mo</span>}
             </div>
             <div className="stat">
-              <span className="tile-l">Covid 2020 fall</span>
+              <span className="tile-l">Fall in Covid 2020 crash</span>
               <span className="tile-v">{c.covid_fall_pct == null ? "–" : `${c.covid_fall_pct.toFixed(1)}%`}</span>
             </div>
             <div className="stat">
-              <span className="tile-l">3-year SIP gain</span>
+              <span className="tile-l">3-year SIP gain (₹5,000/mo)</span>
               <span className="tile-v">
                 <Delta value={c.sip_3y_gain_pct} />
               </span>
@@ -408,7 +409,7 @@ function FundCard({
         )}
       </div>
 
-      {pro && c.pillars && <PillarBars pillars={c.pillars} compact />}
+      {pro && c.pillars && <PillarBars pillars={c.pillars} />}
 
       <div className="fcard-actions">
         <button
@@ -464,7 +465,7 @@ function FundCard({
               {detail === "error" && <p className="error">Could not load. Try again.</p>}
               {loaded && tab === "analysis" && (
                 <div className="bot">
-                  <Blocks blocks={loaded.analysis} onAsk={() => {}} showFollowups={false} />
+                  <Blocks blocks={loaded.analysis} onAsk={(q) => router.push(`/ask?q=${encodeURIComponent(q)}`)} showFollowups={false} embedded />
                 </div>
               )}
               {loaded && tab === "portfolio" && <Allocation a={loaded.allocation} />}

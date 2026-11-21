@@ -9,7 +9,7 @@ export function legalMetadata(slug: LegalSlug): Metadata {
   return { title: `${page.title} · GoMutualFunds` };
 }
 
-// Static page: the Markdown is read at build time (content/legal/<slug>.md).
+// The Markdown is read on each request (content/legal/<slug>.md, shipped in the image).
 export function LegalPage({ slug }: { slug: LegalSlug }) {
   return (
     <div className="legal-page">
