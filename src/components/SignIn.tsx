@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { MeResponse } from "@/lib/users/me-types";
 import { confirmOtp, requestOtp } from "./useMe";
@@ -76,7 +77,17 @@ export function AuthModal({ reason, onClose, onSignedIn }: { reason?: string; on
             </div>
             <label className="consent">
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-              <span>I agree that GoChanakya stores my mobile number and usage to run my account. Answers are for information only, not investment advice.</span>
+              <span>
+                I agree to the{" "}
+                <Link href="/terms" target="_blank">
+                  Terms
+                </Link>{" "}
+                and{" "}
+                <Link href="/privacy" target="_blank">
+                  Privacy Policy
+                </Link>
+                , and that GoChanakya stores my mobile number and usage to run my account. Answers are for information only, not investment advice.
+              </span>
             </label>
             {err && <p className="error">{err}</p>}
             <button className="primary" type="submit" disabled={busy || !consent || !/^[6-9]\d{9}$/.test(digits)}>

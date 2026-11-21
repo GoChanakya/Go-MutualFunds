@@ -6,7 +6,8 @@ import type { MeResponse } from "@/lib/users/me-types";
 import { LogoMark } from "./ui";
 
 // No usage counts here: limits are enforced on the server and the UI only reacts when one is reached.
-export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined; onSignIn: () => void; onSignOut: () => void }) {
+// Without handlers (legal pages) the account area is hidden.
+export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined; onSignIn?: () => void; onSignOut?: () => void }) {
   const path = usePathname();
   return (
     <header className="topbar">
@@ -24,7 +25,7 @@ export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined
           Screener
         </Link>
       </nav>
-      {me && (
+      {me && onSignIn && onSignOut && (
         <div className="account">
           {me.signed_in ? (
             <>

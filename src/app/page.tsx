@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
+import { ChatFooter, SiteFooter } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { AuthModal, ProCard } from "@/components/SignIn";
 import { Arrow, LogoMark } from "@/components/ui";
@@ -68,7 +69,6 @@ export default function Home() {
   const [ctx, setCtx] = useState<ChatContext>({});
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [asOf, setAsOf] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const lastQuestion = useRef<HTMLDivElement>(null);
 
@@ -125,7 +125,6 @@ export default function Home() {
       }
       if (!res.ok || data.error) throw new Error(data.message ?? data.error ?? "Request failed");
       setCtx(data.context);
-      setAsOf(data.meta.as_of);
       setMsgs((m) => [...m, { role: "bot", blocks: data.blocks }]);
     } catch (e) {
       setMsgs((m) => [...m, { role: "error", text: e instanceof Error ? e.message : "Something went wrong" }]);
@@ -134,11 +133,6 @@ export default function Home() {
     }
   }
 
-  const disclaimer = (
-    <div className="disclaimer">
-      Answers use GoChanakya data{asOf ? ` as of ${asOf}` : ""}. For information only, not investment advice.
-    </div>
-  );
   const header = <Header me={me} onSignIn={() => setAuth({})} onSignOut={signOut} />;
   const authModal = auth && (
     <AuthModal
@@ -182,8 +176,8 @@ export default function Home() {
               ))}
             </ol>
           </div>
+          <SiteFooter />
         </div>
-        {disclaimer}
         {authModal}
       </div>
     );
@@ -229,7 +223,7 @@ export default function Home() {
         </div>
       </div>
       <Composer value={input} onChange={setInput} onSend={() => send(input)} busy={busy} />
-      {disclaimer}
+      <ChatFooter />
       {authModal}
     </div>
   );

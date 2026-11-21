@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Blocks } from "@/components/Blocks";
 import { Header, Upgrade } from "@/components/Header";
+import { SiteFooter } from "@/components/Footer";
 import { AuthModal } from "@/components/SignIn";
+import { RISK_LINE, SOURCE_LINE } from "@/lib/config/company";
 import { Arrow, BattingDots, Delta, LockIcon, PillarBars, ScoreRing, cr } from "@/components/ui";
 import { useMe } from "@/components/useMe";
 import type { AllocRow, FundDetail, ScreenerCard, ScreenerResult } from "@/lib/screener-types";
@@ -202,6 +204,7 @@ export default function ScreenerPage() {
         ))}
       </div>
 
+      <p className="filters-note">{RISK_LINE}</p>
       <button className="primary sheet-done" onClick={() => setSheet(false)}>
         Show {res ? res.total.toLocaleString("en-IN") : ""} funds
       </button>
@@ -284,7 +287,8 @@ export default function ScreenerPage() {
               {loading ? "Loading…" : "Load more"}
             </button>
           )}
-          {res && <p className="disclaimer">Data as of {res.as_of}. Scores compare each fund with its own category. Not investment advice.</p>}
+          {res && <p className="disclaimer">Scores compare each fund with its own category. {SOURCE_LINE}</p>}
+          <SiteFooter />
         </main>
       </div>
 

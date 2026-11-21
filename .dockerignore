@@ -4,6 +4,7 @@ node_modules
 *.pdf
 *.txt
 *.md
+!content/legal/*.md
 data-cache
 *.parquet
 .env*
