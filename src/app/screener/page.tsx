@@ -505,11 +505,12 @@ function AllocTable({ title, rows }: { title: string; rows: AllocRow[] }) {
 }
 
 function Allocation({ a }: { a: FundDetail["allocation"] }) {
-  if (!a.sectors.length && !a.asset_class.length && !a.rating.length) return <p className="sub">No portfolio disclosure available.</p>;
+  if (!a.sectors.length && !a.asset_class.length && !a.rating.length && !a.top_holdings.length) return <p className="sub">No portfolio disclosure available.</p>;
   const covered = a.sectors.reduce((s, r) => s + r.pct, 0);
   return (
     <div className="alloc-wrap">
       {a.period && <p className="sub">Share of portfolio, and change in points ({a.period})</p>}
+      <AllocTable title="Top 10 holdings" rows={a.top_holdings} />
       <AllocTable title="Sectors" rows={a.sectors} />
       {a.sectors.length > 0 && covered < 60 && <p className="note">Sector names are disclosed for only part of this portfolio, so these weights understate it.</p>}
       <AllocTable title="Asset class" rows={a.asset_class} />

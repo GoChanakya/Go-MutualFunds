@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { Storage } from "@google-cloud/storage";
-import { EMPTY_TABLE_SQL, RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type RawFile } from "./build";
+import { EMPTY_TABLE_SQL, RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type HoldingsInput, type RawFile } from "./build";
+import { HOLDINGS_BUCKET, latestHoldingsFiles } from "./sources";
 
 // Two ways to get data:
 //  - production: SERVING_BUCKET is set -> read prebuilt tables written by the daily builder job (manifest.json -> files).
@@ -129,10 +130,33 @@ async function fetchRaw(): Promise<Record<RawFile, string>> {
   return out;
 }
 
+// Dev: newest monthly holdings file, cached by month (it doesn't change once published).
+async function fetchHoldings(): Promise<HoldingsInput | undefined> {
+  if (process.env.SKIP_HOLDINGS === "1") return undefined;
+  try {
+    const months = await latestHoldingsFiles(1);
+    const bucket = new Storage().bucket(HOLDINGS_BUCKET);
+    const local = await Promise.all(
+      months.map(async (m) => {
+        const dest = path.join(CACHE_DIR, `holdings_${m.month}_${m.updated.replace(/\D/g, "")}.csv`);
+        if (!fs.existsSync(dest)) {
+          await bucket.file(m.path).download({ destination: `${dest}.part` });
+          fs.renameSync(`${dest}.part`, dest);
+        }
+        return { path: dest, period: m.folder };
+      }),
+    );
+    return local.length ? { now: local[0] } : undefined;
+  } catch (e) {
+    console.warn(JSON.stringify({ type: "holdings_unavailable", error: String(e).slice(0, 200) }));
+    return undefined;
+  }
+}
+
 async function loadRaw(t0: number): Promise<Store> {
-  const files = await fetchRaw();
+  const [files, holdings] = await Promise.all([fetchRaw(), fetchHoldings()]);
   const db = await DuckDBInstance.create(":memory:");
   const conn = await db.connect();
-  await buildServingTables(conn, files);
+  await buildServingTables(conn, files, holdings);
   return finish(conn, `raw-${new Date().toISOString()}`, t0, "raw");
 }

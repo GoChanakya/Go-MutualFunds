@@ -37,6 +37,6 @@ export type AllocRow = { label: string; pct: number; change: number | null };
 export type FundDetail = {
   code: string;
   analysis: Block[];
-  allocation: { period: string | null; sectors: AllocRow[]; asset_class: AllocRow[]; rating: AllocRow[] };
+  allocation: { period: string | null; sectors: AllocRow[]; asset_class: AllocRow[]; rating: AllocRow[]; top_holdings: AllocRow[] };
   details: { label: string; value: string }[];
 };

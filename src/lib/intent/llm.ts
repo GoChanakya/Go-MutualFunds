@@ -43,6 +43,8 @@ Intents:
 - {"intent":"sector_shifts","theme":"<optional sector group code>"}
 - {"intent":"sector_exposure","theme":"<sector group code>","limit":1-10}  diversified funds with the most money in a sector ("most IT exposure")
 - {"intent":"similar_funds","fund":"<fund name>" | "result:N"}  higher-scoring alternatives in the same category
+- {"intent":"top_holdings","fund":"<fund name>" | "result:N","limit":1-20}  a fund's largest stock holdings
+- {"intent":"stock_holders","stock":"<company name as written>","limit":1-10}  funds that hold a given company
 - {"intent":"clarify","question":"<short question back>","options":["..."]}  when the question is too vague
 - {"intent":"out_of_scope","reason":"advice|prediction|news|non_mf|no_data","topic":"<optional>"}  buy/sell advice, predictions, news, non-MF topics;
   no_data = data we don't have: expense ratio, exit load, fund manager, stock-level holdings, 3/5/10-year CAGR, alpha/beta/sharpe
@@ -65,6 +67,8 @@ Q: (previous answer was about one fund) what did it give in the last 6 months ->
 Q: what sectors does parag parikh flexi cap hold -> {"intent":"fund_metric","fund":"parag parikh flexi cap","metric":"allocation"}
 Q: which diversified funds are loaded on banks -> {"intent":"sector_exposure","theme":"EQS-SCT-BFI","limit":5}
 Q: something better than axis bluechip -> {"intent":"similar_funds","fund":"axis bluechip"}
+Q: what are the biggest stocks in hdfc mid cap -> {"intent":"top_holdings","fund":"hdfc mid cap","limit":10}
+Q: which mutual funds have the most reliance -> {"intent":"stock_holders","stock":"reliance","limit":10}
 Q: expense ratio of hdfc flexi -> {"intent":"out_of_scope","reason":"no_data","topic":"expense ratio"}
 Q: compare the first two -> {"intent":"compare","funds":["result:1","result:2"]}
 Q: good fund for me? -> {"intent":"clarify","question":"What is your goal and time horizon?","options":["Long-term growth (5+ years)","Tax saving","Low-risk parking (under 1 year)","Regular income"]}

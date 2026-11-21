@@ -11,11 +11,13 @@ export const rawObjectPath = (f: RawFile, prefix: string) =>
   f === "monthly_returns" ? "monthly_returns/monthly_returns_latest.parquet" : `${prefix}/${f}/latest/${f}.parquet`;
 
 // What the app needs. Written by the builder to gs://<serving bucket>/serving/<build_id>/<table>.parquet
-export const SERVING_TABLES = ["universe", "sector_clean", "sector_names", "alloc", "monthly"] as const;
+export const SERVING_TABLES = ["universe", "sector_clean", "sector_names", "alloc", "monthly", "holdings", "holdings_funds"] as const;
 
 // Empty-table shapes, used when an older serving build doesn't contain a newer table yet.
 export const EMPTY_TABLE_SQL: Partial<Record<(typeof SERVING_TABLES)[number], string>> = {
   monthly: "CREATE TABLE monthly (scheme_code VARCHAR, month VARCHAR, month_end DATE, ret_pct DOUBLE, cat_pct DOUBLE, beat INTEGER, beat_36 INTEGER, comparable_36 INTEGER)",
+  holdings: "CREATE TABLE holdings (scheme_code VARCHAR, isin VARCHAR, name VARCHAR, industry VARCHAR, is_equity BOOLEAN, mv_lakhs DOUBLE, pct DOUBLE)",
+  holdings_funds: "CREATE TABLE holdings_funds (scheme_code VARCHAR, total_lakhs DOUBLE, n_holdings INTEGER, as_on DATE, period VARCHAR, aum_ratio DOUBLE)",
 };
 
 export const sqlPath = (p: string) => `'${p.replace(/\\/g, "/").replace(/'/g, "''")}'`;
@@ -46,7 +48,30 @@ function scoreExpr(lens: Lens): string {
 const JUNK_LABEL =
   "mutual fund|etf|notional|futures|options|^index|percentage|instrument|reit|invit|alternative|units|foreign|overseas|^nil$|not applicable|^others?$|miscellaneous|^sov$|cdmdf|^floating$|unrated|^aif$|fund - direct|fund-direct";
 
-export async function buildServingTables(conn: DuckDBConnection, files: Record<RawFile, string>): Promise<void> {
+// Monthly portfolio file from gs://amc-csv-data, used for STOCK-level holdings only (sectors come from sector_rotation).
+// `period` is the folder name, e.g. "October26".
+export type HoldingsInput = { now: { path: string; period: string } };
+
+// A real ISIN: two letters + 10 characters. Subtotal/total rows ("Sub Total", "PORTFOLIO TOTAL", "EQUITY & EQUITY RELATED TOTAL")
+// have no ISIN; a real company with "Total" in its name (Adani Total Gas) always has one.
+const VALID_ISIN = (col = "isin") => `regexp_matches(coalesce(${col}, ''), '^[A-Z]{2}[A-Z0-9]{10}$')`;
+const SUBTOTAL_ROW = `(lower(coalesce(isin, '')) LIKE 'sub%' OR lower(coalesce(isin, '')) LIKE 'tot%' OR lower(coalesce(isin, '')) LIKE 'grand%'
+  OR (NOT ${VALID_ISIN()} AND (coalesce(trim(name), '') = '' OR regexp_matches(lower(name), '(\\btotal\\b|subtotal)'))))`;
+
+// Clean one month's holdings file: drop subtotal/total rows and exact duplicate rows (one AMC lists every holding twice).
+// Fund codes are normalised: some AMCs write them as decimals ("113099.0").
+async function loadHoldingsMonth(run: (sql: string) => Promise<unknown>, tag: string, path: string) {
+  await run(`
+    CREATE TABLE h_${tag} AS
+    SELECT DISTINCT regexp_replace(trim(CAST(amficode AS VARCHAR)), '\\.0+$', '') AS amficode, trim(isin) AS isin, trim(name) AS name, trim(industry) AS industry,
+      category, quantity, try_cast(market_value AS DOUBLE) AS mv, as_on_date
+    FROM read_csv_auto(${sqlPath(path)}, all_varchar = true, sample_size = -1)
+    WHERE try_cast(market_value AS DOUBLE) IS NOT NULL AND NOT ${SUBTOTAL_ROW}`);
+  // each fund's total = all clean rows (stocks, bonds, cash, net receivables), so % of fund adds up to ~100
+  await run(`CREATE TABLE hf_${tag} AS SELECT amficode, sum(mv) AS total, count(*) AS n, max(as_on_date) AS as_on FROM h_${tag} GROUP BY amficode HAVING sum(mv) > 0`);
+}
+
+export async function buildServingTables(conn: DuckDBConnection, files: Record<RawFile, string>, holdingsIn?: HoldingsInput): Promise<void> {
   const run = (sql: string) => conn.run(sql);
   for (const f of RAW_FILES) await run(`CREATE OR REPLACE TABLE raw_${f} AS SELECT * FROM read_parquet(${sqlPath(files[f])})`);
 
@@ -115,21 +140,34 @@ export async function buildServingTables(conn: DuckDBConnection, files: Record<R
   `);
   await run(`DROP TABLE base; DROP TABLE pillars; DROP TABLE universe0; DROP TABLE universe1;`);
 
+  // Upstream sometimes lists every holding twice (seen for all HDFC equity funds): the sector amounts then add up to a
+  // whole multiple of the fund's AUM. Divide those back so cross-fund totals (sector shifts) count each fund once.
+  await run(`
+    CREATE TABLE sr_dup AS
+    WITH s AS (SELECT amficode, sum(market_value) AS mv, sum(prev_market_value) AS pmv FROM raw_sector_rotation WHERE dimension = 'sector' GROUP BY amficode),
+      r AS (SELECT s.amficode, s.mv / u.aum_lakhs AS r, s.pmv / u.aum_lakhs AS pr FROM s JOIN universe u ON u.scheme_code = s.amficode WHERE u.aum_lakhs > 0)
+    SELECT amficode,
+      CASE WHEN r >= 1.7 AND abs(r - round(r)) < 0.3 THEN round(r) ELSE 1 END AS k,
+      CASE WHEN pr >= 1.7 AND abs(pr - round(pr)) < 0.3 THEN round(pr) ELSE 1 END AS pk
+    FROM r`);
+
   // Sector holdings, cleaned: real sector names only (the raw labels also contain ISINs, numbers and notes).
   await run(`
     CREATE TABLE sector_clean AS
     SELECT s.amficode AS scheme_code, u.grp, u.active_passive,
       trim(regexp_replace(replace(lower(s.label), '&', 'and'), '\\s+', ' ', 'g')) AS skey,
-      s.label, coalesce(s.market_value, 0) AS mv, coalesce(s.prev_market_value, 0) AS prev_mv,
+      s.label, coalesce(s.market_value, 0) / coalesce(d.k, 1) AS mv, coalesce(s.prev_market_value, 0) / coalesce(d.pk, 1) AS prev_mv,
       s.action, s.period, s.base_period
     FROM raw_sector_rotation s
     JOIN universe u ON u.scheme_code = s.amficode
+    LEFT JOIN sr_dup d ON d.amficode = s.amficode
     WHERE s.dimension = 'sector'
       AND regexp_matches(s.label, '[A-Za-z]{3}')
       AND NOT regexp_matches(lower(trim(s.label)), '^in[a-z0-9]{10}$')
       AND NOT regexp_matches(lower(s.label), '${JUNK_LABEL}')
   `);
   await run(`CREATE TABLE sector_names AS SELECT skey, mode(label) AS label FROM sector_clean GROUP BY skey`);
+  await run(`DROP TABLE sr_dup`);
 
   // Per-fund allocation for the screener: sectors (equity), asset class (all) and credit rating (debt).
   await run(`
@@ -147,6 +185,67 @@ export async function buildServingTables(conn: DuckDBConnection, files: Record<R
             AND NOT regexp_matches(lower(trim(s.label)), '^in[a-z0-9]{10}$')
             AND NOT regexp_matches(lower(s.label), '${JUNK_LABEL}')))
   `);
+  // ---- Stock-level holdings (gs://amc-csv-data), cleaned. Used for stocks only; sectors stay on sector_rotation. ----
+  if (holdingsIn) {
+    await loadHoldingsMonth(run, "now", holdingsIn.now.path);
+    await run(`CREATE TABLE stock_names AS SELECT isin, mode(name) AS name, mode(industry) AS industry FROM h_now WHERE ${VALID_ISIN()} AND coalesce(name, '') <> '' GROUP BY isin`);
+    await run(`
+      CREATE TABLE holdings AS
+      SELECT h.amficode AS scheme_code, h.isin,
+        coalesce(any_value(n.name), any_value(h.name)) AS name,
+        coalesce(any_value(n.industry), any_value(h.industry)) AS industry,
+        bool_or((substr(h.isin, 1, 2) = 'IN' AND substr(h.isin, 9, 2) = '10') OR lower(coalesce(h.category, '')) LIKE 'equity%') AS is_equity,
+        round(sum(h.mv), 2) AS mv_lakhs,
+        round(100 * sum(h.mv) / any_value(t.total), 3) AS pct
+      FROM h_now h
+      JOIN hf_now t USING (amficode)
+      JOIN universe u ON u.scheme_code = h.amficode
+      LEFT JOIN stock_names n ON n.isin = h.isin
+      WHERE ${VALID_ISIN("h.isin")}
+      GROUP BY h.amficode, h.isin`);
+    // per fund: cleaned total vs official AUM (quality check), date and month of the disclosure
+    await run(`
+      CREATE TABLE holdings_funds AS
+      SELECT t.amficode AS scheme_code, round(t.total, 2) AS total_lakhs, CAST(t.n AS INTEGER) AS n_holdings,
+        try_strptime(t.as_on, '%d/%m/%Y')::DATE AS as_on, '${holdingsIn.now.period}' AS period,
+        round(t.total / nullif(u.aum_lakhs, 0), 3) AS aum_ratio
+      FROM hf_now t JOIN universe u ON u.scheme_code = t.amficode`);
+    // A fund whose cleaned holdings total is far from its official AUM filed an incomplete portfolio in this file:
+    // its percentages would mislead, so it gets no stock-level data.
+    await run(`DELETE FROM holdings_funds WHERE aum_ratio IS NOT NULL AND (aum_ratio < 0.5 OR aum_ratio > 1.5)`);
+    await run(`DELETE FROM holdings WHERE scheme_code NOT IN (SELECT scheme_code FROM holdings_funds)`);
+    for (const t of ["h_now", "hf_now", "stock_names"]) await run(`DROP TABLE ${t}`);
+  } else {
+    await run(EMPTY_TABLE_SQL.holdings!);
+    await run(EMPTY_TABLE_SQL.holdings_funds!);
+  }
+
+  // sector_rotation sometimes divides by an inflated fund total (duplicate and subtotal rows upstream), so a fund's
+  // sectors add up to far less than its equity share (HDFC Flexi Cap: 33% instead of ~97%). Rescale those funds'
+  // sectors to the equity share, keeping each sector's relative size. Equity share comes from our cleaned holdings
+  // (checked against AUM), else from sector_rotation's asset_class; funds with neither are left as they are.
+  // Guards: only pure equity funds and ETFs are touched (hybrid and debt rows mix bond issuers such as "Sov" into the
+  // sectors, and their equity share is unreliable in both sources), and a fund is only scaled UP when its named
+  // sectors already cover 20%+ (a tiny base would be blown up into noise).
+  await run(`
+    CREATE TABLE sector_fix AS
+    WITH s AS (SELECT scheme_code, sum(pct) AS sp, sum(prev_pct) AS spp FROM alloc WHERE dimension = 'sector' GROUP BY scheme_code),
+      ac AS (SELECT scheme_code, sum(pct) FILTER (WHERE label = 'Equity') AS eq FROM alloc WHERE dimension = 'asset_class' GROUP BY scheme_code),
+      hq AS (SELECT scheme_code, sum(pct) AS eq FROM holdings WHERE is_equity GROUP BY scheme_code),
+      e AS (SELECT s.*, least(coalesce(hq.eq, ac.eq), 100) AS eq FROM s
+        JOIN universe u USING (scheme_code) LEFT JOIN ac USING (scheme_code) LEFT JOIN hq USING (scheme_code)
+        WHERE u.grp LIKE 'EQS%' OR u.grp LIKE 'ETF%')
+    SELECT scheme_code,
+      CASE WHEN (sp >= 20 AND sp < 0.85 * eq) OR sp > 101 THEN eq / sp ELSE 1 END AS k,
+      CASE WHEN (spp >= 20 AND spp < 0.85 * eq) OR spp > 101 THEN eq / spp ELSE 1 END AS pk
+    FROM e WHERE eq > 0`);
+  await run(`DELETE FROM sector_fix WHERE k = 1 AND pk = 1`);
+  await run(`
+    UPDATE alloc SET pct = round(alloc.pct * f.k, 2), prev_pct = round(alloc.prev_pct * f.pk, 2),
+      delta_pct = round(coalesce(alloc.pct * f.k, 0) - coalesce(alloc.prev_pct * f.pk, 0), 2)
+    FROM sector_fix f WHERE alloc.scheme_code = f.scheme_code AND alloc.dimension = 'sector'`);
+  await run(`DROP TABLE sector_fix`);
+
   // Month-by-month returns (last 36 months) with the category average for each month.
   await run(`
     CREATE TABLE monthly AS

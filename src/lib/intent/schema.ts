@@ -30,6 +30,10 @@ export const IntentSchema = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("sector_shifts"), theme: z.enum(groupCodes).optional() }),
   // funds ranked by how much of their portfolio is in a sector: "funds with most IT exposure"
   z.object({ intent: z.literal("sector_exposure"), theme: z.enum(groupCodes), limit: z.number().int().min(1).max(10).default(5) }),
+  // a fund's largest stock holdings: "top holdings of Parag Parikh Flexi Cap"
+  z.object({ intent: z.literal("top_holdings"), fund: FundRef, limit: z.number().int().min(1).max(20).default(10) }),
+  // funds holding a stock: "which funds hold HDFC Bank"
+  z.object({ intent: z.literal("stock_holders"), stock: z.string().min(2).max(80), limit: z.number().int().min(1).max(10).default(10) }),
   // higher-scoring funds in the same category: "alternatives to HDFC Small Cap"
   z.object({ intent: z.literal("similar_funds"), fund: FundRef }),
   z.object({ intent: z.literal("clarify"), question: z.string().max(200), options: z.array(z.string().max(60)).max(5).default([]) }),

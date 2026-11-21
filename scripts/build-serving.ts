@@ -12,7 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { Storage } from "@google-cloud/storage";
-import { RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type RawFile } from "../src/lib/data/build";
+import { RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type HoldingsInput, type RawFile } from "../src/lib/data/build";
+import { HOLDINGS_BUCKET, latestHoldingsFiles } from "../src/lib/data/sources";
 
 const SOURCE_BUCKET = process.env.DATA_BUCKET ?? "mf-data-public";
 const SOURCE_PREFIX = process.env.DATA_PREFIX ?? "backend_main_kartik";
@@ -38,19 +39,34 @@ async function main() {
       files[f] = dest;
     }),
   );
-  log({ step: "fetched", ms: Date.now() - t0 });
+  // stock-level holdings: the newest monthly portfolio file
+  const months = await latestHoldingsFiles(1, storage);
+  if (!months.length) throw new Error(`No holdings files found in gs://${HOLDINGS_BUCKET}`);
+  const local = await Promise.all(
+    months.map(async (m) => {
+      const dest = path.join(work, `holdings_${m.month}.csv`);
+      await storage.bucket(HOLDINGS_BUCKET).file(m.path).download({ destination: dest });
+      return { path: dest, period: m.folder };
+    }),
+  );
+  const holdingsIn: HoldingsInput = { now: local[0] };
+  log({ step: "fetched", ms: Date.now() - t0, holdings: months.map((m) => m.path) });
 
   // 2. build
   const db = await DuckDBInstance.create(":memory:");
   const conn = await db.connect();
-  await buildServingTables(conn, files);
+  await buildServingTables(conn, files, holdingsIn);
   const meta = await readMeta(conn);
 
   // 3. sanity checks: never publish broken or stale data
   const [c] = (await conn.runAndReadAll(`
     SELECT count(*)::INT AS funds, count(score_balanced)::INT AS scored, count(DISTINCT grp)::INT AS groups,
            (SELECT count(*)::INT FROM alloc) AS alloc_rows, (SELECT count(*)::INT FROM sector_clean) AS sector_rows,
-           (SELECT count(*)::INT FROM monthly) AS monthly_rows
+           (SELECT count(*)::INT FROM monthly) AS monthly_rows,
+           (SELECT count(*)::INT FROM holdings) AS holdings_rows,
+           (SELECT count(*)::INT FROM holdings_funds) AS holdings_funds,
+           (SELECT count(*)::INT FROM holdings_funds WHERE aum_ratio BETWEEN 0.85 AND 1.15) AS holdings_funds_match_aum,
+           (SELECT CAST(max(as_on) AS VARCHAR) FROM holdings_funds) AS holdings_as_on
     FROM universe`)).getRowObjectsJson() as Record<string, number>[];
   const navAgeDays = meta.nav ? (Date.now() - Date.parse(meta.nav)) / 86_400_000 : Infinity;
   const problems: string[] = [];
@@ -59,6 +75,10 @@ async function main() {
   if (c.groups < 50) problems.push(`only ${c.groups} peer groups (expected 50+)`);
   if (c.alloc_rows < 5000) problems.push(`only ${c.alloc_rows} allocation rows`);
   if (c.monthly_rows < 20000) problems.push(`only ${c.monthly_rows} monthly return rows`);
+  if (c.holdings_rows < 50000) problems.push(`only ${c.holdings_rows} holding rows`);
+  if (c.holdings_funds < 1000) problems.push(`holdings for only ${c.holdings_funds} funds`);
+  const holdingsAge = (Date.now() - Date.parse(String(c.holdings_as_on))) / 86_400_000;
+  if (!(holdingsAge <= 75)) problems.push(`latest holdings are ${Math.round(holdingsAge)} days old`);
   if (navAgeDays > MAX_NAV_AGE_DAYS) problems.push(`NAV data is ${navAgeDays.toFixed(1)} days old (max ${MAX_NAV_AGE_DAYS})`);
   log({ step: "checked", ...c, nav_as_of: meta.nav, problems });
   if (problems.length) throw new Error(`Not publishing: ${problems.join("; ")}`);

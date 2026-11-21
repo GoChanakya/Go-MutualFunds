@@ -34,7 +34,9 @@ export type Block =
   | { type: "bars"; title: string; unit: "%"; series: [string, string]; rows: { label: string; value: number | null; ref: number | null }[] }
   | { type: "compare"; funds: FundRow[]; rows: { label: string; values: string[]; best?: number }[] }
   // sector overlap of two funds: per sector, the common part (min) is shaded, the rest belongs to the bigger side
-  | { type: "overlap"; a: string; b: string; overlap_pct: number; rows: { label: string; a: number; b: number }[]; period: string | null }
+  | { type: "overlap"; kind: "sector" | "stock"; a: string; b: string; overlap_pct: number; rows: { label: string; a: number; b: number }[]; period: string | null }
+  // a fund's largest stock holdings, or the funds holding a given stock
+  | { type: "holdings"; title: string; rows: { label: string; sub: string; pct: number }[]; period: string | null }
   | { type: "sector_shifts"; title: string; period: string; up: ShiftRow[]; down: ShiftRow[] }
   | { type: "choices"; text: string; options: string[] }
   | { type: "note"; text: string };

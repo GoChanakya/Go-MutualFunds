@@ -149,6 +149,7 @@ export async function fundDetail(code: string): Promise<FundDetail | null> {
       .slice(0, n)
       .map((a) => ({ label: String(a.label), pct: Number(a.pct), change: num(a.delta_pct) }));
   const p = alloc.find((a) => a.period);
+  const stocks = await query<Row>(`SELECT name, pct FROM holdings WHERE scheme_code = ${q(code)} AND is_equity AND pct > 0 ORDER BY pct DESC LIMIT 10`);
   const fmtAmt = (v: unknown) => (num(v) ? `₹${Number(v).toLocaleString("en-IN")}` : "-");
   return {
     code,
@@ -158,6 +159,7 @@ export async function fundDetail(code: string): Promise<FundDetail | null> {
       sectors: pick("sector", 12),
       asset_class: pick("asset_class", 6),
       rating: pick("rating", 8),
+      top_holdings: stocks.map((x) => ({ label: String(x.name), pct: Number(x.pct), change: null })),
     },
     details: [
       { label: "Benchmark", value: String(row.benchmark ?? "-") },

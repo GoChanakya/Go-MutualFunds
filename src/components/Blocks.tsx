@@ -75,7 +75,10 @@ function Overlap({ block }: { block: Extract<Block, { type: "overlap" }> }) {
     <div className="panel overlap">
       <div className="ov-head">
         <div>
-          <div className="mini-title">Sector overlap{block.period ? ` · ${block.period}` : ""}</div>
+          <div className="mini-title">
+            {block.kind === "stock" ? "Stock overlap · top 20 holdings" : "Sector overlap"}
+            {block.period ? ` · ${block.period}` : ""}
+          </div>
           <div className="ov-pct">
             {block.overlap_pct.toFixed(0)}
             <small>%</small>
@@ -114,7 +117,9 @@ function Overlap({ block }: { block: Extract<Block, { type: "overlap" }> }) {
         })}
       </div>
       <div className="ov-foot sub">
-        % of each portfolio. The hatched part is held by both funds; Overlap % adds up the hatched parts.
+        {block.kind === "stock"
+          ? "% of each fund in that stock. Hatched = held by both; Overlap % adds up the hatched parts of the shared stocks."
+          : "% of each portfolio. The hatched part is held by both funds; Overlap % adds up the hatched parts."}
       </div>
     </div>
   );
@@ -253,6 +258,30 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
             );
           case "overlap":
             return <Overlap key={i} block={b} />;
+          case "holdings": {
+            const max = Math.max(1, ...b.rows.map((r) => r.pct));
+            return (
+              <div key={i} className="panel hold-list">
+                <div className="mini-title">
+                  {b.title}
+                  {b.period ? ` · ${b.period}` : ""}
+                </div>
+                {b.rows.map((r, k) => (
+                  <div className="hold-row" key={k}>
+                    <span className="rank">{k + 1}</span>
+                    <span className="hold-name">
+                      {r.label}
+                      {r.sub && <small>{r.sub}</small>}
+                    </span>
+                    <div className="hold-track">
+                      <i style={{ width: `${(r.pct / max) * 100}%` }} />
+                    </div>
+                    <span className="num">{r.pct.toFixed(2)}%</span>
+                  </div>
+                ))}
+              </div>
+            );
+          }
           case "compare":
             return (
               <div key={i} className="panel table-wrap">

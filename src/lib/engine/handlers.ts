@@ -9,7 +9,8 @@ import type { Block, ChatContext, Fact, FundRow, ShiftRow } from "@/lib/types";
 import { fmtCr, fmtInr, fmtMonths, fmtPct, fmtScore, fmtYears, num } from "./format";
 import { catStats, compareInsights, profileInsights, rankInsights, returnBars } from "./insights";
 import { monthLabel, monthlyBars, monthlyView } from "./monthly";
-import { sectorOverlapBlocks } from "./overlap";
+import { sectorOverlapBlocks, stockOverlapBlocks } from "./overlap";
+import { resolveStock } from "@/lib/data/stocks";
 
 // Executes a validated intent against our data and builds the answer blocks.
 // Every number and every sentence here comes from our code - never from the LLM.
@@ -472,6 +473,87 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext, exe
   return { blocks, context: { ...ctx, last_intent: { intent: "fund_metric", fund: "result:1", metric }, last_results: [f.code] } };
 }
 
+// ---------------- top_holdings / stock_holders (gs://amc-csv-data portfolios) ----------------
+
+async function topHoldings(ref: string, limit: number, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
+  const r = await resolveRef(ref, ctx);
+  if (!r.code) return notFound(r.candidates, ctx);
+  const [row] = await fundsByCodes([r.code]);
+  if (!row) return notFound([], ctx);
+  const f = toFundRow(row);
+  const keep = { ...ctx, last_intent: { intent: "fund_profile" as const, fund: "result:1" }, last_results: [f.code] };
+  const [meta] = await query<Row>(`SELECT n_holdings, CAST(as_on AS VARCHAR) AS as_on, period FROM holdings_funds WHERE scheme_code = ${q(f.code)}`);
+  const stocks = await query<Row>(`SELECT name, industry, pct FROM holdings WHERE scheme_code = ${q(f.code)} AND is_equity AND pct > 0 ORDER BY pct DESC`);
+  if (!meta || !stocks.length)
+    return {
+      blocks: [{ type: "text", text: `Stock-level holdings for **${f.name}** aren't in this month's portfolio data (or it doesn't hold stocks). Try its sector allocation instead.` }],
+      context: keep,
+    };
+  const n = Math.min(limit, exec.planId === "free" ? 3 : 20);
+  const top10 = stocks.slice(0, 10).reduce((s, x) => s + Number(x.pct), 0);
+  const blocks: Block[] = [
+    {
+      type: "text",
+      text: `**${f.name}** holds ${stocks.length} stocks. Its top 10 make up **${top10.toFixed(1)}%** of the fund${
+        top10 >= 60 ? ", a concentrated portfolio" : top10 <= 35 ? ", a well-spread portfolio" : ""
+      }. Largest: ${stocks
+        .slice(0, 3)
+        .map((x) => `${x.name} (${Number(x.pct).toFixed(1)}%)`)
+        .join(", ")}.`,
+    },
+    {
+      type: "holdings",
+      title: `Top ${n} holdings`,
+      period: meta.period ? String(meta.period) : null,
+      rows: stocks.slice(0, n).map((x) => ({ label: String(x.name), sub: String(x.industry ?? ""), pct: Number(x.pct) })),
+    },
+  ];
+  if (exec.planId === "free" && stocks.length > n) blocks.push({ type: "note", text: `Free plan shows the top ${n}. Pro shows the top 20 holdings.` });
+  blocks.push({ type: "choices", text: "", options: [`Where does ${f.name} invest?`, `Funds similar to ${f.name}`] });
+  return { blocks, context: keep };
+}
+
+// Actively managed stock-picking funds. The Active/Passive flag in the source data mislabels some index funds, and
+// arbitrage funds hold hedged positions, so both are excluded by category and name as well.
+const PASSIVE_GROUPS = ["EQS-IXF", "OTH-EQS", "ETF-EQE", "EQS-OTH", "ETF-OTH", "ETF-INT", "EQS-IXF-BFI", "OTH-FFD", "OTH-FFD-SBT", "HYB-ARB", "HYB-EQS"];
+const REAL_ACTIVE = `u.active_passive = 'Active' AND u.grp NOT IN (${PASSIVE_GROUPS.map((g) => `'${g}'`).join(", ")})
+  AND NOT regexp_matches(lower(u.name), '(index|\betf\b|bees|arbitrage)')`;
+
+async function stockHolders(stockText: string, limit: number, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
+  const stock = await resolveStock(stockText);
+  if (!stock)
+    return { blocks: [{ type: "text", text: `I couldn't find "${stockText}" in any fund's portfolio. Try the company's name, e.g. "HDFC Bank" or "Reliance Industries".` }], context: ctx };
+  const n = Math.min(limit, exec.maxRankRows);
+  // actively managed funds first: index funds/ETFs that copy a sector index would otherwise fill the list
+  const rows = await query<Row>(`
+    SELECT u.*, h.pct AS stock_pct FROM holdings h JOIN universe u USING (scheme_code)
+    WHERE h.isin = ${q(stock.isin)} AND h.pct > 0 AND ${REAL_ACTIVE} ORDER BY h.pct DESC LIMIT ${n}`);
+  const [cnt] = await query<Row>(`
+    SELECT count(DISTINCT h.scheme_code)::INT AS n,
+      count(DISTINCT h.scheme_code) FILTER (WHERE ${REAL_ACTIVE})::INT AS active,
+      max(h.pct) FILTER (WHERE NOT (${REAL_ACTIVE})) AS passive_max
+    FROM holdings h JOIN universe u USING (scheme_code) WHERE h.isin = ${q(stock.isin)} AND h.pct > 0`);
+  const [meta] = await query<Row>(`SELECT any_value(period) AS period FROM holdings_funds`);
+  const funds = rows.map((x) => toFundRow(x));
+  const blocks: Block[] = [
+    {
+      type: "text",
+      text: `**${stock.name}** is held by **${cnt?.n ?? 0} funds** (${cnt?.active ?? 0} actively managed). Actively managed funds with the largest positions, as a share of each fund:`,
+    },
+    {
+      type: "holdings",
+      title: `Funds with the most ${stock.name}`,
+      period: meta?.period ? String(meta.period) : null,
+      rows: rows.map((x) => ({ label: String(x.name), sub: groupName(String(x.grp)), pct: Number(x.stock_pct) })),
+    },
+  ];
+  if (num(cnt?.passive_max))
+    blocks.push({ type: "note", text: `Index funds, ETFs and arbitrage funds are left out: they hold it to track an index or as a hedge (up to ${Number(cnt.passive_max).toFixed(1)}% of the fund).` });
+  if (exec.planId === "free" && limit > rows.length) blocks.push({ type: "note", text: `Free plan shows the top ${rows.length}. Pro shows up to ${MAX_ROWS} funds.` });
+  blocks.push({ type: "choices", text: "", options: funds.length >= 2 ? ["Compare the first two", "Tell me more about the first one"] : ["Tell me more about the first one"] });
+  return { blocks, context: { ...ctx, last_intent: { intent: "stock_holders", stock: stockText, limit }, last_results: funds.map((x) => x.code) } };
+}
+
 // ---------------- sector_exposure ----------------
 
 async function sectorExposure(theme: string, limit: number, ctx: ChatContext, exec: ExecOptions): Promise<Result> {
@@ -578,6 +660,8 @@ async function compare(refs: string[], ctx: ChatContext): Promise<Result> {
   const blocks: Block[] = [
     { type: "compare", funds, rows: table },
     ...(await compareInsights(rows, funds)),
+    { type: "heading", text: "Stock overlap" },
+    ...(await stockOverlapBlocks(codes, funds.map((f) => f.name))),
     { type: "heading", text: "Sector overlap" },
     ...(await sectorOverlapBlocks(codes, funds.map((f) => f.name))),
   ];
@@ -680,6 +764,10 @@ export async function execute(intent: Intent, ctx: ChatContext, opts: ExecOption
       return sectorExposure(intent.theme, intent.limit, ctx, opts);
     case "similar_funds":
       return similarFunds(intent.fund, ctx, opts);
+    case "top_holdings":
+      return topHoldings(intent.fund, intent.limit, ctx, opts);
+    case "stock_holders":
+      return stockHolders(intent.stock, intent.limit, ctx, opts);
     case "compare":
       return compare(intent.funds, ctx);
     case "explain_metric":

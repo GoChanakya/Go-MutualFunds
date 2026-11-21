@@ -95,7 +95,7 @@ function rank(groups: string[], extra: Partial<RankIntent>, base?: RankIntent): 
 
 // Which single metric a question about one fund is asking for. Specific periods before generic "returns".
 const FUND_METRIC_RES: [FundMetric, RegExp][] = [
-  ["allocation", /\b(sectors?|sector allocation|allocation|holdings?|portfolio|exposure|asset mix|asset allocation|credit (quality|ratings?)|ratings? mix|invest(s|ing)? in|where does)\b/],
+  ["allocation", /\b(sectors?|sector allocation|allocation|portfolio|exposure|asset mix|asset allocation|credit (quality|ratings?)|ratings? mix|invest(s|ing)? in|where does)\b/],
   ["consistency", /\b(batting( avg| average)?|consisten\w*|beat (the |its )?(category|peers))\b/],
   ["ret_3y", /\b(3|three) ?(y|yr|yrs|years?)\b|\bcagr\b/],
   ["ret_1m", /\b(1|one) ?(m|mo|mon|month)\b|\b(last|this|previous|past) month\b|\bmonthly\b|\bmonth on month\b/],
@@ -143,7 +143,7 @@ export async function rulesParse(question: string, ctx: ChatContext): Promise<In
 
   // Things we don't have data for yet: say so honestly instead of showing the help menu
   const noData = t.match(
-    /\b(expense ratio|ter|exit load|fund manager|managed by|top holdings?|stock holdings?|which stocks|stocks? (held|it holds)|(5|10|five|ten)[ -]?(y|yr|years?) (returns?|cagr)|alpha|beta|sharpe|sortino|standard deviation)\b/,
+    /\b(expense ratio|ter|exit load|fund manager|managed by|(5|10|five|ten)[ -]?(y|yr|years?) (returns?|cagr)|alpha|beta|sharpe|sortino|standard deviation)\b/,
   );
   if (noData) return { intent: "out_of_scope", reason: "no_data", topic: noData[1] };
 
@@ -154,6 +154,28 @@ export async function rulesParse(question: string, ctx: ChatContext): Promise<In
   ) {
     const theme = Object.entries(THEME_SECTOR_PATTERNS).find(([, re]) => re.test(t))?.[0];
     if (theme) return { intent: "sector_exposure", theme, limit: parseLimit(t) ?? 5 };
+  }
+
+  // Funds holding a stock: "which funds hold HDFC Bank", "funds with reliance", "who owns infosys"
+  const holders = t.match(
+    /\b(?:which|what|show|list)?\s*(?:mutual )?(?:funds?|schemes?)\s+(?:hold|holds|holding|own|owns|owning|have|has|having|with|that hold|invested in|investing in|buy|bought)\s+(.+?)\s*$|\bwho (?:holds|owns|has)\s+(.+?)\s*$/,
+  );
+  if (holders) {
+    const stock = (holders[1] ?? holders[2] ?? "").replace(/\b(shares?|stocks?|the|most|maximum|in their portfolio|in portfolio)\b/g, " ").replace(/\s+/g, " ").trim();
+    if (stock.length >= 2 && !(await mentionsBrand(stock) && (await strongFundMatch(stock)))) return { intent: "stock_holders", stock, limit: parseLimit(t) ?? 10 };
+  }
+
+  // A fund's top holdings: "top holdings of X", "what stocks does X hold", "X's biggest stocks"
+  if (has(t, /\b(holdings?|stocks?|shares|companies)\b/) && !has(t, /\b(which|what) (funds?|schemes?)\b/)) {
+    const nameText = t
+      .replace(/\b(top|biggest|largest|main|key|holdings?|stocks?|shares|companies|does|do|it|its|it's|this|that|fund|funds|hold|holds|own|owns|in|of|what|whats|show|list|me|the|portfolio|\d+)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (nameText && ((await mentionsBrand(nameText)) || (await strongFundMatch(nameText)))) {
+      const r = await resolveOne(nameText);
+      if (r.fund) return { intent: "top_holdings", fund: nameText, limit: parseLimit(t) ?? 10 };
+    } else if (!nameText && (last?.intent === "fund_profile" || last?.intent === "fund_metric") && ctx.last_results?.length === 1)
+      return { intent: "top_holdings", fund: "result:1", limit: parseLimit(t) ?? 10 };
   }
 
   // Alternatives to a fund: "alternatives to HDFC Small Cap", "funds similar to quant small cap"

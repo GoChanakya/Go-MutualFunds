@@ -7,6 +7,18 @@ import type { Block, ChatContext } from "@/lib/types";
 
 // Each inner array is one conversation (follow-ups depend on earlier turns).
 const CONVERSATIONS: string[][] = [
+  // stock holdings (Nov 21)
+  [
+    "top holdings of parag parikh flexi cap",
+    "compare parag parikh flexi cap vs hdfc flexi cap",
+    "which funds hold HDFC Bank",
+    "funds holding reliance",
+    "who owns sbi",
+    "what stocks does hdfc mid cap hold",
+    "Tell me about HDFC Small Cap Fund",
+    "its top 5 holdings",
+    "where does hdfc flexi cap invest",
+  ],
   // monthly returns, sector overlap, holdings prompts (Nov 21)
   [
     "returns of parag parikh flexi cap",
@@ -99,6 +111,8 @@ function summarize(b: Block): string {
       return `  table[${b.title}]:\n` + b.rows.map((r, i) => `    ${i + 1}. ${r.name} | score ${r.score?.toFixed(0)} | ${JSON.stringify(Object.values(r.pillars).map((v) => (v === null ? null : Math.round(v))))}`).join("\n");
     case "fund_card":
       return `  card: ${b.fund.name} score ${b.fund.score?.toFixed(0)}\n` + b.facts.map((f) => `    ${f.label}: ${f.value}${f.hint ? ` (${f.hint})` : ""}`).join("\n") + `\n    + ${b.strengths.join(" | ")}\n    - ${b.watch.join(" | ")}`;
+    case "holdings":
+      return `  holdings [${b.title}]: ` + b.rows.slice(0, 6).map((r) => `${r.label} ${r.pct}%`).join(", ");
     case "overlap":
       return `  overlap ${b.overlap_pct}% (${b.a} vs ${b.b}): ` + b.rows.slice(0, 6).map((r) => `${r.label} ${r.a}/${r.b}`).join(", ");
     case "compare":
