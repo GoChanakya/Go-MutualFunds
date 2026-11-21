@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { Firestore } from "@google-cloud/firestore";
 import { PRO_PRICE_INR } from "@/lib/config/plans";
+import { paidThrough } from "./entitlement";
 
 type Subscription = {
   id: string;
@@ -18,7 +19,7 @@ export function billingConfig() {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   const planId = process.env.RAZORPAY_PLAN_ID;
-  if (!process.env.FIRESTORE_PROJECT || !keyId || !keySecret || !planId) throw new Error("Razorpay billing is not configured");
+  if (!process.env.FIRESTORE_PROJECT || !keyId || !keySecret || !planId || !process.env.RAZORPAY_WEBHOOK_SECRET) throw new Error("Razorpay billing is not configured");
   return { keyId, keySecret, planId };
 }
 
@@ -26,7 +27,7 @@ function db() {
   return new Firestore({ projectId: process.env.FIRESTORE_PROJECT, databaseId: process.env.FIRESTORE_DATABASE ?? "(default)" });
 }
 
-export function signatureValid(message: string, signature: string | null, secret: string) {
+export function signatureValid(message: string | Buffer, signature: string | null, secret: string) {
   if (!signature || !/^[a-f0-9]{64}$/i.test(signature)) return false;
   const expected = crypto.createHmac("sha256", secret).update(message).digest();
   const actual = Buffer.from(signature, "hex");
@@ -64,13 +65,21 @@ export async function createSubscription(uid: string) {
   const claim = await store.runTransaction(async (tx) => {
     const snap = await tx.get(billing);
     const data = snap.data();
-    if (data?.subscription_id && ["created", "authenticated"].includes(data.status)) return { existing: data.subscription_id as string };
-    if (data?.subscription_id && ["active", "pending"].includes(data.status)) return { active: true };
+    if (data?.plan_id === config.planId && data?.subscription_id && ["created", "authenticated"].includes(data.status)) return { existing: data.subscription_id as string };
+    if (data?.plan_id === config.planId && data?.subscription_id && ["active", "pending", "halted", "paused", "resumed"].includes(data.status)) return { active: true };
     if (data?.creating_at && Date.now() - Date.parse(data.creating_at) < 120000) return { creating: true };
     tx.set(billing, { creating_at: now(), create_nonce: nonce }, { merge: true });
     return { claimed: true };
   });
-  if ("existing" in claim) return { id: claim.existing, key: config.keyId };
+  if ("existing" in claim) {
+    const existingId = claim.existing;
+    if (!existingId) throw new Error("Missing existing subscription id");
+    const existing = await api<Subscription>(`subscriptions/${existingId}`);
+    if (["created", "authenticated"].includes(existing.status)) return { id: existingId, key: config.keyId };
+    await syncSubscription(existingId);
+    if (["expired", "cancelled", "completed"].includes(existing.status)) return createSubscription(uid);
+    throw new Error("A subscription already exists for this account");
+  }
   if ("active" in claim) throw new Error("A subscription already exists for this account");
   if ("creating" in claim) throw new Error("Subscription creation is in progress. Please retry shortly.");
 
@@ -85,7 +94,7 @@ export async function createSubscription(uid: string) {
       const snap = await tx.get(billing);
       if (snap.data()?.create_nonce !== nonce) throw new Error("Subscription creation claim changed");
       tx.set(store.collection("razorpay_subscriptions").doc(sub.id), { uid, plan_id: config.planId, created_at: now() });
-      tx.set(billing, { subscription_id: sub.id, status: sub.status, created_at: now(), creating_at: null, create_nonce: null }, { merge: true });
+      tx.set(billing, { subscription_id: sub.id, plan_id: config.planId, status: sub.status, created_at: now(), creating_at: null, create_nonce: null }, { merge: true });
     });
     return { id: sub.id, key: config.keyId };
   } catch (error) {
@@ -113,15 +122,21 @@ export async function syncSubscription(id: string, eventId?: string) {
   await store.runTransaction(async (tx) => {
     const [billSnap, userSnap, eventSnap] = await Promise.all([tx.get(billing), tx.get(user), event ? tx.get(event) : Promise.resolve(null)]);
     if (eventSnap?.exists) return;
-    if (billSnap.data()?.subscription_id !== id || !userSnap.exists) throw new Error("Subscription owner mismatch");
-    const previous = userSnap.data()?.plan_expires_at;
-    const priorEnd = typeof previous === "string" ? Date.parse(previous) : 0;
-    const currentEnd = (sub.current_end ?? 0) * 1000;
-    const paidThrough = sub.paid_count > 0 ? Math.max(Number.isFinite(priorEnd) ? priorEnd : 0, currentEnd) : 0;
-    // Authenticated mandates alone never grant Pro. A paid cycle must have a future end.
-    const paid = paidThrough > Date.now();
-    tx.set(billing, { status: sub.status, paid_count: sub.paid_count, current_end: sub.current_end, synced_at: now() }, { merge: true });
-    if (paid) tx.set(user, { plan: "pro", plan_expires_at: new Date(paidThrough).toISOString(), plan_updated_at: now() }, { merge: true });
+    if (!userSnap.exists) throw new Error("Subscription owner missing");
+    if (billSnap.data()?.subscription_id !== id) {
+      // A delayed event from an older, replaced subscription must not affect the new one.
+      if (event) tx.create(event, { subscription_id: id, event_id: eventId, processed_at: now(), ignored: "replaced" });
+      return;
+    }
+    const previousCount = Number(billSnap.data()?.paid_count ?? 0);
+    const previousThrough = Number(billSnap.data()?.paid_through ?? 0);
+    const through = ["active", "pending", "halted", "cancelled", "completed", "paused", "resumed"].includes(sub.status)
+      ? paidThrough(previousCount, previousThrough, sub.paid_count, sub.current_end)
+      : previousThrough;
+    // Authenticated mandates alone never grant Pro. A successful paid cycle must have a future end.
+    const paid = through > Date.now();
+    tx.set(billing, { status: sub.status, paid_count: sub.paid_count, current_end: sub.current_end, paid_through: through, synced_at: now() }, { merge: true });
+    if (paid) tx.set(user, { plan: "pro", plan_expires_at: new Date(through).toISOString(), plan_updated_at: now() }, { merge: true });
     else if (userSnap.data()?.plan === "pro" && userSnap.data()?.razorpay_subscription_id === id) tx.set(user, { plan: "free", plan_expires_at: null, plan_updated_at: now() }, { merge: true });
     if (paid) tx.set(user, { razorpay_subscription_id: id }, { merge: true });
     if (event) tx.create(event, { subscription_id: id, event_id: eventId, processed_at: now() });
@@ -132,4 +147,10 @@ export async function syncSubscription(id: string, eventId?: string) {
 export async function checkoutSubscriptionFor(uid: string) {
   const snap = await db().collection("billing").doc(uid).get();
   return snap.data()?.subscription_id as string | undefined;
+}
+
+export async function isKnownSubscription(id: string) {
+  if (!subId.test(id)) return false;
+  const snap = await db().collection("razorpay_subscriptions").doc(id).get();
+  return snap.exists;
 }

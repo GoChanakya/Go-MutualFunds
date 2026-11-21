@@ -281,7 +281,7 @@ export default function ScreenerPage() {
             />
           ))}
 
-          {res?.locked && res.total > res.shown && <Upgrade text={`${(res.total - res.shown).toLocaleString("en-IN")} more funds match your filters.`} />}
+          {res?.locked && res.total > res.shown && <Upgrade text={`${(res.total - res.shown).toLocaleString("en-IN")} more funds match your filters.`} me={me} onSignIn={() => setAuthOpen(true)} onUpgraded={refresh} />}
           {res?.has_more && (
             <button className="textbtn strong load-more" disabled={loading} onClick={() => search(f, res.page + 1)}>
               {loading ? "Loading…" : "Load more"}

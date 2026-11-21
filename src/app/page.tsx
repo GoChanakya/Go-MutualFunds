@@ -202,7 +202,7 @@ export default function Home() {
                     // follow-up suggestions only under the latest answer
                     <Blocks blocks={m.blocks} onAsk={send} showFollowups={i === lastBot && !busy} />
                   ) : m.role === "pro" ? (
-                    <ProCard me={me} onSignIn={() => setAuth({})} onInterested={refresh} />
+                    <ProCard me={me} onSignIn={() => setAuth({})} onUpgraded={refresh} />
                   ) : (
                     m.text
                   )}

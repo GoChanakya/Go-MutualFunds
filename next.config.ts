@@ -2,15 +2,16 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
 
-// Content-Security-Policy: only our own scripts, styles, images and API calls. Next.js needs inline scripts
-// for hydration; dev mode also needs eval for hot reload.
+// Next.js needs inline scripts for hydration; dev mode also needs eval for hot reload.
+// Razorpay Checkout loads its script and resources from Razorpay-owned hosts.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https://checkout.razorpay.com https://cdn.razorpay.com",
   "font-src 'self' data:",
-  `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
+  `connect-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://lumberjack.razorpay.com${isDev ? " ws: wss:" : ""}`,
+  "frame-src https://api.razorpay.com https://checkout.razorpay.com",
   "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",

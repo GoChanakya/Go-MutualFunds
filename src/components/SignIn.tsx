@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { MeResponse } from "@/lib/users/me-types";
 import { confirmOtp, requestOtp } from "./useMe";
+import { SubscribeButton } from "./SubscribeButton";
 
 // WhatsApp OTP sign-in dialog: mobile number -> 6-digit code.
 export function AuthModal({ reason, onClose, onSignedIn }: { reason?: string; onClose: () => void; onSignedIn: (me: MeResponse) => void }) {
@@ -142,10 +143,8 @@ export function AuthModal({ reason, onClose, onSignedIn }: { reason?: string; on
   );
 }
 
-// Shown when the free questions are used up. Payments come in phase 2; until then, collect interest from verified users.
-export function ProCard({ me, onSignIn, onInterested }: { me: MeResponse | undefined; onSignIn: () => void; onInterested: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(Boolean(me?.pro_interest));
+// Shown when the free questions are used up.
+export function ProCard({ me, onSignIn, onUpgraded }: { me: MeResponse | undefined; onSignIn: () => void; onUpgraded: () => void }) {
   return (
     <div className="pro-card">
       <div className="pro-top">
@@ -155,7 +154,6 @@ export function ProCard({ me, onSignIn, onInterested }: { me: MeResponse | undef
             ₹400<small>/month</small>
           </div>
         </div>
-        <span className="soon">Launching soon</span>
       </div>
       <p>You&apos;ve used your 10 free questions. Pro includes:</p>
       <ul className="pro-list">
@@ -163,29 +161,7 @@ export function ProCard({ me, onSignIn, onInterested }: { me: MeResponse | undef
         <li>Every fund in the screener, with all data points</li>
         <li>Full analysis, sector allocation and portfolio overlap</li>
       </ul>
-      {!me?.signed_in ? (
-        <button className="primary" onClick={onSignIn}>
-          Sign in with WhatsApp
-        </button>
-      ) : done ? (
-        <p className="pro-done">You&apos;re on the list. We&apos;ll message you on WhatsApp when Pro opens.</p>
-      ) : (
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            const r = await fetch("/api/pro-interest", { method: "POST" });
-            setBusy(false);
-            if (r.ok) {
-              setDone(true);
-              onInterested();
-            }
-          }}
-        >
-          {busy ? "Saving…" : "Notify me when Pro launches"}
-        </button>
-      )}
+      <SubscribeButton me={me} onSignIn={onSignIn} onUpgraded={onUpgraded} />
     </div>
   );
 }

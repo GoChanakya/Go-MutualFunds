@@ -1,0 +1,18 @@
+# Razorpay Subscriptions setup for GoMutualFunds
+
+The app already stores `users/{uid}.plan` and `plan_expires_at` in Firestore and enforces Pro limits on every server request. The billing integration adds `billing/{uid}`, `razorpay_subscriptions/{sub_id}`, and `razorpay_events/{event_id}`. Browser clients have no direct Firestore access. Do not edit Firestore rules to allow it.
+
+## In the Razorpay Dashboard (Test mode first)
+
+1. Enable **Subscriptions** for the account. Create a plan under **Subscriptions → Plans**: **GoMutualFunds Pro**, **INR ₹400.00**, **monthly**, interval **1**. Copy its `plan_...` ID. Test and Live modes need separate plans and credentials. Confirm the final customer charge and tax treatment in Checkout before going live.
+2. Generate the Test API Key ID and Key Secret under **Account & Settings → API Keys**. Keep the secret in a password manager or Google Secret Manager; never paste it into source, the browser, or chat.
+3. Under **Account & Settings → Webhooks**, add `https://YOUR_DOMAIN/api/billing/webhook` in Test mode. Choose a new random webhook secret, separate from the API Key Secret. Subscribe to `subscription.authenticated`, `subscription.activated`, `subscription.charged`, `subscription.updated`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`, `subscription.completed`, `subscription.paused`, and `subscription.resumed`. The endpoint must be publicly reachable over HTTPS.
+4. Set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_PLAN_ID`, and `RAZORPAY_WEBHOOK_SECRET` for the app. `FIRESTORE_PROJECT` must point at the existing user database. Restart/redeploy the app. In Cloud Run, store the two secrets in Secret Manager and grant only the app service account access. The Key ID and Plan ID can be ordinary environment variables.
+5. Run a Test-mode subscription from a signed-in account. Confirm the Firestore user stays free while checkout is merely opened and becomes Pro only after a paid cycle is confirmed. Check `plan_expires_at` and the billing record. Send a duplicate webhook and verify that the event ID is recorded once. Test failed payment and cancellation, and verify access lasts only through the already paid period.
+6. For Live mode, create a separate Live plan and Live API keys plus a Live webhook and secret. Update all four app settings together, then perform a small real subscription test with your own account before announcing availability. Do not mix Test and Live IDs.
+
+The plan is configured for 60 monthly cycles, so the mandate ends after at most five years. The app does not create a new mandate automatically. Cancellation and 15-day refund requests follow the existing Refund & Cancellation policy; handle those in the Razorpay Dashboard and update the user entitlement if a refund should end access immediately. A refund does **not** automatically revoke Pro in this integration.
+
+The checkout Key ID is public by design. The API Key Secret and webhook secret remain on the server. The Checkout callback is verified with the API Key Secret and the server's stored subscription ID. Webhooks use a separate signature over the raw request body, deduplicate by Razorpay event ID, and fetch the current subscription from Razorpay before changing Firestore.
+
+Razorpay references: [integration guide](https://razorpay.com/docs/payments/subscriptions/integration-guide/), [create plan](https://razorpay.com/docs/api/payments/subscriptions/create-plan/), [create subscription](https://razorpay.com/docs/api/payments/subscriptions/create-subscription/), [webhook validation](https://razorpay.com/docs/webhooks/validate-test/).

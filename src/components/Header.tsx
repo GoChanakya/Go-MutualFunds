@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { MeResponse } from "@/lib/users/me-types";
 import { LogoMark } from "./ui";
+import { SubscribeButton } from "./SubscribeButton";
 
 // No usage counts here: limits are enforced on the server and the UI only reacts when one is reached.
 // Without handlers (legal pages) the account area is hidden.
@@ -47,14 +48,14 @@ export function Header({ me, onSignIn, onSignOut }: { me: MeResponse | undefined
 }
 
 // Screener: free users see the top results only.
-export function Upgrade({ text }: { text: string }) {
+export function Upgrade({ text, me, onSignIn, onUpgraded }: { text: string; me: MeResponse | undefined; onSignIn: () => void; onUpgraded: () => void }) {
   return (
     <div className="upgrade">
       <div>
         <b>{text}</b>
         <p>Pro (₹400/month) unlocks every fund, every data point, sector allocation and 200 questions a day.</p>
       </div>
-      <span className="soon">Launching soon</span>
+      <SubscribeButton me={me} onSignIn={onSignIn} onUpgraded={onUpgraded} />
     </div>
   );
 }
