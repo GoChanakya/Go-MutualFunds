@@ -33,6 +33,8 @@ export type Block =
   // fund value vs category median, e.g. returns over 3m/6m/1y
   | { type: "bars"; title: string; unit: "%"; series: [string, string]; rows: { label: string; value: number | null; ref: number | null }[] }
   | { type: "compare"; funds: FundRow[]; rows: { label: string; values: string[]; best?: number }[] }
+  // sector overlap of two funds: per sector, the common part (min) is shaded, the rest belongs to the bigger side
+  | { type: "overlap"; a: string; b: string; overlap_pct: number; rows: { label: string; a: number; b: number }[]; period: string | null }
   | { type: "sector_shifts"; title: string; period: string; up: ShiftRow[]; down: ShiftRow[] }
   | { type: "choices"; text: string; options: string[] }
   | { type: "note"; text: string };

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { Storage } from "@google-cloud/storage";
-import { RAW_FILES, SERVING_TABLES, buildServingTables, readMeta, sqlPath, type RawFile } from "./build";
+import { EMPTY_TABLE_SQL, RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type RawFile } from "./build";
 
 // Two ways to get data:
 //  - production: SERVING_BUCKET is set -> read prebuilt tables written by the daily builder job (manifest.json -> files).
@@ -89,8 +89,10 @@ async function loadServing(t0: number, sameAs?: string): Promise<Store> {
   fs.mkdirSync(dir, { recursive: true });
   const db = await DuckDBInstance.create(":memory:");
   const conn = await db.connect();
+  // A build made before a table existed simply doesn't list it: create that table empty instead of failing.
+  const available = SERVING_TABLES.filter((t) => manifest.tables[t]);
   await Promise.all(
-    SERVING_TABLES.map(async (t) => {
+    available.map(async (t) => {
       const dest = path.join(dir, `${t}.parquet`);
       if (!fs.existsSync(dest)) {
         await bucket.file(manifest.tables[t]).download({ destination: `${dest}.part` });
@@ -98,7 +100,10 @@ async function loadServing(t0: number, sameAs?: string): Promise<Store> {
       }
     }),
   );
-  for (const t of SERVING_TABLES) await conn.run(`CREATE TABLE ${t} AS SELECT * FROM read_parquet(${sqlPath(path.join(dir, `${t}.parquet`))})`);
+  for (const t of SERVING_TABLES) {
+    if (manifest.tables[t]) await conn.run(`CREATE TABLE ${t} AS SELECT * FROM read_parquet(${sqlPath(path.join(dir, `${t}.parquet`))})`);
+    else if (EMPTY_TABLE_SQL[t]) await conn.run(EMPTY_TABLE_SQL[t]!);
+  }
   return finish(conn, manifest.build_id, t0, "serving");
 }
 
@@ -115,7 +120,7 @@ async function fetchRaw(): Promise<Record<RawFile, string>> {
       const dest = path.join(CACHE_DIR, `${f}.parquet`);
       const fresh = fs.existsSync(dest) && Date.now() - fs.statSync(dest).mtimeMs < REFRESH_HOURS * 3600_000;
       if (!fresh) {
-        await bucket.file(`${SOURCE_PREFIX}/${f}/latest/${f}.parquet`).download({ destination: `${dest}.part` });
+        await bucket.file(rawObjectPath(f, SOURCE_PREFIX)).download({ destination: `${dest}.part` });
         fs.renameSync(`${dest}.part`, dest);
       }
       out[f] = dest;

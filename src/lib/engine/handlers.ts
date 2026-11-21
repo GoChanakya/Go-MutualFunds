@@ -8,6 +8,8 @@ import type { FundMetric, Intent, RankIntent } from "@/lib/intent/schema";
 import type { Block, ChatContext, Fact, FundRow, ShiftRow } from "@/lib/types";
 import { fmtCr, fmtInr, fmtMonths, fmtPct, fmtScore, fmtYears, num } from "./format";
 import { catStats, compareInsights, profileInsights, rankInsights, returnBars } from "./insights";
+import { monthLabel, monthlyBars, monthlyView } from "./monthly";
+import { sectorOverlapBlocks } from "./overlap";
 
 // Executes a validated intent against our data and builds the answer blocks.
 // Every number and every sentence here comes from our code - never from the LLM.
@@ -225,7 +227,7 @@ async function fundProfile(ref: string, ctx: ChatContext): Promise<Result> {
   );
   const opts = [`Best ${groupName(String(row.grp))} funds`];
   if (leader) opts.push(`Compare ${fund.name} vs ${leader.name}`);
-  opts.push("What is resilience?");
+  opts.push(`Where does ${fund.name} invest?`);
   const ins = await profileInsights(row, fund);
   const blocks: Block[] = [
     ...(ins.verdict ? [ins.verdict] : []),
@@ -254,9 +256,11 @@ const METRIC_LABEL: Record<FundMetric, string> = {
   score: "overall score",
   consistency: "consistency",
   returns: "returns",
+  ret_1m: "1-month return",
   ret_3m: "3-month return",
   ret_6m: "6-month return",
   ret_1y: "1-year return",
+  ret_3y: "3-year return",
   sip: "SIP returns",
   resilience: "resilience",
   momentum: "momentum",
@@ -293,6 +297,7 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext, exe
   const vs = (v: unknown, med: unknown) => `${fmtPct(v)} (${cat} median ${fmtPct(med)})`;
   let text = "";
   let facts: Fact[] = [];
+  let returnBlocks: Block[] | null = null; // monthly-data returns view, when available
 
   switch (metric) {
     case "allocation": {
@@ -360,11 +365,41 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext, exe
       ];
       break;
     }
+    case "ret_1m":
+    case "ret_3y":
     case "ret_3m":
     case "ret_6m":
     case "ret_1y":
     case "returns": {
-      const col = { ret_3m: ["ret_3m_pct", "r3", "3 months"], ret_6m: ["ret_6m_pct", "r6", "6 months"], ret_1y: ["ret_1y_pct", "r1", "1 year"], returns: ["ret_1y_pct", "r1", "1 year"] }[metric];
+      const mv = await monthlyView(f.code);
+      if (mv) {
+        const key = ({ ret_1m: "1m", ret_3m: "3m", ret_6m: "6m", ret_1y: "1y", ret_3y: "3y", returns: "1y" } as const)[metric];
+        const p = mv.periods.find((x) => x.key === key)!;
+        const vsCat = p.cat !== null ? `, against a category average of ${fmtPct(p.cat)}` : "";
+        if (p.fund === null)
+          text = `${name} doesn't have ${key === "3y" ? "3 years" : p.label} of monthly history yet. Here is what it has, to ${mv.latestLabel}:`;
+        else if (key === "1m") text = `${name} returned **${fmtPct(p.fund)}** in ${mv.latestLabel}${vsCat}.`;
+        else if (key === "3y") text = `${name} returned **${fmtPct(p.fund)} a year** over the 3 years to ${mv.latestLabel}${vsCat}.`;
+        else text = `${name} returned **${fmtPct(p.fund)}** over the ${p.label} to ${mv.latestLabel}${vsCat}.`;
+        if (p.fund !== null && p.cat !== null) {
+          const d = p.fund - p.cat;
+          text += Math.abs(d) < 0.25 ? " That's in line with its category." : d > 0 ? ` That's ${d.toFixed(1)} pts ahead of its category.` : ` That's ${Math.abs(d).toFixed(1)} pts behind its category.`;
+        }
+        facts = mv.periods.map((x) => ({ label: x.label, value: fmtPct(x.fund), hint: x.cat !== null ? `category ${fmtPct(x.cat)}` : undefined }));
+        returnBlocks = [monthlyBars(mv)];
+        if (mv.beat36 !== null && mv.comparable36)
+          returnBlocks.push({ type: "note", text: `Beat its category average in ${mv.beat36} of the last ${mv.comparable36} months. Returns are month-end to month-end, to ${mv.latestLabel}.` });
+        break;
+      }
+      // fallback when a fund has no monthly history: trailing returns from fund cards
+      const col = {
+        ret_1m: ["ret_3m_pct", "r3", "3 months"],
+        ret_3m: ["ret_3m_pct", "r3", "3 months"],
+        ret_6m: ["ret_6m_pct", "r6", "6 months"],
+        ret_1y: ["ret_1y_pct", "r1", "1 year"],
+        ret_3y: ["ret_1y_pct", "r1", "1 year"],
+        returns: ["ret_1y_pct", "r1", "1 year"],
+      }[metric];
       text = `${name} returned **${fmtPct(row[col[0]])}** over ${col[2]}, against a ${cat} median of ${fmtPct(m?.[col[1]])}.`;
       if (metric === "returns" && standing(f.pillars.returns)) text += ` On returns it is ${standing(f.pillars.returns)}.`;
       facts = [
@@ -416,8 +451,13 @@ async function fundMetric(ref: string, metric: FundMetric, ctx: ChatContext, exe
   }
 
   const blocks: Block[] = [{ type: "text", text }];
-  if (metric === "returns" || metric.startsWith("ret_")) {
-    // returns: a small chart vs the category median, then the SIP line
+  if (returnBlocks) {
+    // monthly data: period returns as tiles, then the 12-month chart
+    if (facts.length) blocks.push({ type: "facts", facts });
+    blocks.push(...returnBlocks);
+    facts = [];
+  } else if (metric === "returns" || metric.startsWith("ret_")) {
+    // no monthly history: a small chart vs the category median, then the SIP line
     const bars = returnBars(row, await catStats([String(row.grp)]));
     if (bars) blocks.push(bars);
     facts = facts.filter((x) => x.label.includes("SIP"));
@@ -535,7 +575,12 @@ async function compare(refs: string[], ctx: ChatContext): Promise<Result> {
     return { label: s.label, values: vals.map(s.fmt), best };
   });
 
-  const blocks: Block[] = [{ type: "compare", funds, rows: table }, ...(await compareInsights(rows, funds))];
+  const blocks: Block[] = [
+    { type: "compare", funds, rows: table },
+    ...(await compareInsights(rows, funds)),
+    { type: "heading", text: "Sector overlap" },
+    ...(await sectorOverlapBlocks(codes, funds.map((f) => f.name))),
+  ];
   if (new Set(rows.map((r) => r.grp)).size > 1)
     blocks.push({ type: "note", text: "These funds are in different categories. Pillar scores compare each fund with its own category, so compare them with care." });
   return {
@@ -612,7 +657,14 @@ const OOS: Record<string, string> = {
     "isn't in our data yet. For any fund I can show returns (3 months, 6 months, 1 year), the 3-year SIP result, batting average, momentum, resilience in crashes, fund size, age and sector allocation.",
 };
 
-const HELP_OPTIONS = ["Best small cap funds", "Best passive funds", "Best technology funds", "Compare Parag Parikh Flexi Cap and HDFC Flexi Cap", "What is your 5-pillar score?", "Where are fund managers moving money?"];
+const HELP_OPTIONS = [
+  "Best small cap funds",
+  "Compare Parag Parikh Flexi Cap and HDFC Flexi Cap",
+  "Where does HDFC Flexi Cap invest?",
+  "Funds with most IT exposure",
+  "Last month return of Parag Parikh Flexi Cap",
+  "What is your 5-pillar score?",
+];
 
 export type ExecOptions = { maxRankRows: number; planId: "free" | "pro" };
 

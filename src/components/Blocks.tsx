@@ -67,6 +67,60 @@ function Bars({ block }: { block: Extract<Block, { type: "bars" }> }) {
   );
 }
 
+// Sector overlap: one vertical column per sector. Bottom (hatched) = weight both funds share;
+// top = the extra weight of whichever fund holds more of that sector.
+function Overlap({ block }: { block: Extract<Block, { type: "overlap" }> }) {
+  const max = Math.max(1, ...block.rows.map((r) => Math.max(r.a, r.b)));
+  return (
+    <div className="panel overlap">
+      <div className="ov-head">
+        <div>
+          <div className="mini-title">Sector overlap{block.period ? ` · ${block.period}` : ""}</div>
+          <div className="ov-pct">
+            {block.overlap_pct.toFixed(0)}
+            <small>%</small>
+          </div>
+        </div>
+        <div className="ov-legend">
+          <span>
+            <i className="sw common" /> Common to both
+          </span>
+          <span>
+            <i className="sw a" /> Extra in {block.a}
+          </span>
+          <span>
+            <i className="sw b" /> Extra in {block.b}
+          </span>
+        </div>
+      </div>
+      <div className="ov-chart" role="img" aria-label={`Sector overlap ${block.overlap_pct.toFixed(0)} percent between ${block.a} and ${block.b}`}>
+        {block.rows.map((r, k) => {
+          const common = Math.min(r.a, r.b);
+          const extra = Math.abs(r.a - r.b);
+          const side = r.a > r.b ? "a" : "b";
+          return (
+            <div className="ov-col" key={k} title={`${r.label}: ${block.a} ${r.a.toFixed(1)}%, ${block.b} ${r.b.toFixed(1)}%, common ${common.toFixed(1)}%`}>
+              <div className="ov-val">
+                {r.a.toFixed(1)}
+                <span>/</span>
+                {r.b.toFixed(1)}
+              </div>
+              <div className="ov-bar">
+                {extra > 0.05 && <i className={`ov-extra ${side}`} style={{ height: `${(extra / max) * 100}%` }} />}
+                {common > 0 && <i className="ov-common" style={{ height: `${(common / max) * 100}%` }} />}
+              </div>
+              <div className="ov-label">{r.label}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="ov-foot sub">
+        Numbers above each column: {block.a} / {block.b}, % of portfolio. Overlap % adds up the common part of every sector.
+      </div>
+    </div>
+  );
+}
+
 function FundList({ rows, onAsk }: { rows: FundRow[]; onAsk: (q: string) => void }) {
   return (
     <div className="panel fund-list">
@@ -198,6 +252,8 @@ export function Blocks({ blocks, onAsk, showFollowups }: { blocks: Block[]; onAs
                 )}
               </div>
             );
+          case "overlap":
+            return <Overlap key={i} block={b} />;
           case "compare":
             return (
               <div key={i} className="panel table-wrap">

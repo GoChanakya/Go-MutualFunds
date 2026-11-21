@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { Storage } from "@google-cloud/storage";
-import { RAW_FILES, SERVING_TABLES, buildServingTables, readMeta, sqlPath, type RawFile } from "../src/lib/data/build";
+import { RAW_FILES, SERVING_TABLES, buildServingTables, rawObjectPath, readMeta, sqlPath, type RawFile } from "../src/lib/data/build";
 
 const SOURCE_BUCKET = process.env.DATA_BUCKET ?? "mf-data-public";
 const SOURCE_PREFIX = process.env.DATA_PREFIX ?? "backend_main_kartik";
@@ -34,7 +34,7 @@ async function main() {
   await Promise.all(
     RAW_FILES.map(async (f) => {
       const dest = path.join(work, `${f}.parquet`);
-      await storage.bucket(SOURCE_BUCKET).file(`${SOURCE_PREFIX}/${f}/latest/${f}.parquet`).download({ destination: dest });
+      await storage.bucket(SOURCE_BUCKET).file(rawObjectPath(f, SOURCE_PREFIX)).download({ destination: dest });
       files[f] = dest;
     }),
   );
@@ -49,7 +49,8 @@ async function main() {
   // 3. sanity checks: never publish broken or stale data
   const [c] = (await conn.runAndReadAll(`
     SELECT count(*)::INT AS funds, count(score_balanced)::INT AS scored, count(DISTINCT grp)::INT AS groups,
-           (SELECT count(*)::INT FROM alloc) AS alloc_rows, (SELECT count(*)::INT FROM sector_clean) AS sector_rows
+           (SELECT count(*)::INT FROM alloc) AS alloc_rows, (SELECT count(*)::INT FROM sector_clean) AS sector_rows,
+           (SELECT count(*)::INT FROM monthly) AS monthly_rows
     FROM universe`)).getRowObjectsJson() as Record<string, number>[];
   const navAgeDays = meta.nav ? (Date.now() - Date.parse(meta.nav)) / 86_400_000 : Infinity;
   const problems: string[] = [];
@@ -57,6 +58,7 @@ async function main() {
   if (c.scored < 500) problems.push(`only ${c.scored} scored funds (expected 500+)`);
   if (c.groups < 50) problems.push(`only ${c.groups} peer groups (expected 50+)`);
   if (c.alloc_rows < 5000) problems.push(`only ${c.alloc_rows} allocation rows`);
+  if (c.monthly_rows < 20000) problems.push(`only ${c.monthly_rows} monthly return rows`);
   if (navAgeDays > MAX_NAV_AGE_DAYS) problems.push(`NAV data is ${navAgeDays.toFixed(1)} days old (max ${MAX_NAV_AGE_DAYS})`);
   log({ step: "checked", ...c, nav_as_of: meta.nav, problems });
   if (problems.length) throw new Error(`Not publishing: ${problems.join("; ")}`);

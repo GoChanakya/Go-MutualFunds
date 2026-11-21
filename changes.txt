@@ -1,0 +1,53 @@
+CHANGES: 
+
+1. We need to add compare holdings in the comparison of funds, Sectoral overlaps and stock overlaps
+
+2. Sector overlap is common value of Sector of each fund so if Fund A is Banks 20% and Fund B is Banks 32% then a vertical histogram will show the common shaded value of 20% and balance 32% on Fund B Side
+
+3. Stock Overlap Same, consider top 20 stocks from holdings and show a graph with overlapping figure 
+Overlap % = Total of common % of both the funds 
+
+4. If user asks for returns for any fund, then we need to take data from monthly returns for that fund, based on fuzzy search of the name, currently it is not showing returns of any fund
+
+5. Suggested prompt questions should include holdings related questions too. 
+
+
+SIGN UP FLOW:
+
+1. Do not show the free count on the home page and make it visible, 
+
+2. Keep the free count upto 10 questions - after that any follow up question ask the user to register for Pro
+
+3. First 10 questions dont need user to sign up with mobile, can we read cookies and store locally? 
+
+4. After that they need to sign up for Pro plan 
+
+5. Pro Plan - Rs. 400 per month, trigger the Razorpay subscription product
+
+Dont show message below: 
+"Answers use GoChanakya data as of 2026-11-20. For information only, not investment advice."
+
+Change to  
+Source: AMFI India, RBI, and official factsheets. For information only, not investment advice. 
+
+Add disclaimer as a footer on the pages or on left tab in the bottom. 
+
+Mutual Funds Investments are subject to market risks please read all scheme related documents carefully.  GoMutualFunds is a part of GoChanakya Fintech ecosystem. 
+
+
+COMPLIANCE AND OTHER THINGS
+Additional Sections to be added: 
+
+Add all necessary legal terminologies and sub-pages which are required to be mainted by Indian companies for their websites. 
+
+Use below Details of company 
+
+Gochanakya Fintech Private Limited
+Email: info@gochanakya.com 
+Contact: +91 9136461246 on whatsapp and call
+
+Add a Refund Policy of 15 days refund
+
+Add Terms and Conditions Page
+
+Add Privacy Policy Page

@@ -6,7 +6,7 @@ import { LENSES, PILLARS } from "@/lib/config/score";
 
 const groupCodes = GROUPS.map((g) => g.code) as [string, ...string[]];
 export const SORT_KEYS = ["score", ...PILLARS, "ret_1y", "ret_3m", "aum", "age"] as const;
-export const FUND_METRICS = ["allocation", "score", "consistency", "returns", "ret_3m", "ret_6m", "ret_1y", "sip", "resilience", "momentum", "aum", "age", "nav"] as const;
+export const FUND_METRICS = ["allocation", "score", "consistency", "returns", "ret_1m", "ret_3m", "ret_6m", "ret_1y", "ret_3y", "sip", "resilience", "momentum", "aum", "age", "nav"] as const;
 export type FundMetric = (typeof FUND_METRICS)[number];
 
 // A fund is referenced either by name text (resolved by our code) or by position in the last results ("result:2").

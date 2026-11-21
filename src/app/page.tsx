@@ -12,9 +12,10 @@ type Msg = { role: "user"; text: string } | { role: "bot"; blocks: Block[] } | {
 
 const STARTERS: { title: string; sub: string; q: string }[] = [
   { title: "Best small cap funds", sub: "Ranked by our 5-pillar score", q: "Best small cap funds" },
-  { title: "Compare two funds", sub: "Parag Parikh vs HDFC Flexi Cap", q: "Compare Parag Parikh Flexi Cap vs HDFC Flexi Cap" },
-  { title: "Funds that hold up in crashes", sub: "Most resilient flexi caps", q: "Most resilient flexi cap funds" },
-  { title: "Where is money moving?", sub: "Sector shifts in fund portfolios", q: "Where are fund managers moving money?" },
+  { title: "Compare two funds", sub: "Scores, returns and sector overlap", q: "Compare Parag Parikh Flexi Cap vs HDFC Flexi Cap" },
+  { title: "Where does a fund invest?", sub: "Sector allocation of HDFC Flexi Cap", q: "Where does HDFC Flexi Cap invest?" },
+  { title: "Funds heavy on IT", sub: "Most technology exposure", q: "Funds with most IT exposure" },
+  { title: "Last month's return", sub: "Parag Parikh Flexi Cap vs its category", q: "Last month return of Parag Parikh Flexi Cap" },
 ];
 
 function Composer({ value, onChange, onSend, busy, left }: { value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean; left: number | null }) {

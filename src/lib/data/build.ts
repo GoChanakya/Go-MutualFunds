@@ -4,12 +4,19 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
 import { LENS_WEIGHTS, LENSES, MIN_AGE_YEARS, MIN_PEERS, MIN_PILLARS, PILLARS, type Lens } from "@/lib/config/score";
 
-// Raw inputs: gs://<source bucket>/<prefix>/<name>/latest/<name>.parquet
-export const RAW_FILES = ["fund_cards", "category", "recovery_speed", "sector_rotation", "aum"] as const;
+// Raw inputs in the source bucket. Most follow <prefix>/<name>/latest/<name>.parquet; monthly returns has its own path.
+export const RAW_FILES = ["fund_cards", "category", "recovery_speed", "sector_rotation", "aum", "monthly_returns"] as const;
 export type RawFile = (typeof RAW_FILES)[number];
+export const rawObjectPath = (f: RawFile, prefix: string) =>
+  f === "monthly_returns" ? "monthly_returns/monthly_returns_latest.parquet" : `${prefix}/${f}/latest/${f}.parquet`;
 
 // What the app needs. Written by the builder to gs://<serving bucket>/serving/<build_id>/<table>.parquet
-export const SERVING_TABLES = ["universe", "sector_clean", "sector_names", "alloc"] as const;
+export const SERVING_TABLES = ["universe", "sector_clean", "sector_names", "alloc", "monthly"] as const;
+
+// Empty-table shapes, used when an older serving build doesn't contain a newer table yet.
+export const EMPTY_TABLE_SQL: Partial<Record<(typeof SERVING_TABLES)[number], string>> = {
+  monthly: "CREATE TABLE monthly (scheme_code VARCHAR, month VARCHAR, month_end DATE, ret_pct DOUBLE, cat_pct DOUBLE, beat INTEGER, beat_36 INTEGER, comparable_36 INTEGER)",
+};
 
 export const sqlPath = (p: string) => `'${p.replace(/\\/g, "/").replace(/'/g, "''")}'`;
 
@@ -139,6 +146,17 @@ export async function buildServingTables(conn: DuckDBConnection, files: Record<R
             regexp_matches(s.label, '[A-Za-z]{3}')
             AND NOT regexp_matches(lower(trim(s.label)), '^in[a-z0-9]{10}$')
             AND NOT regexp_matches(lower(s.label), '${JUNK_LABEL}')))
+  `);
+  // Month-by-month returns (last 36 months) with the category average for each month.
+  await run(`
+    CREATE TABLE monthly AS
+    SELECT CAST(m.amfi_code AS VARCHAR) AS scheme_code, m.return_month AS month, m.month_end_date AS month_end,
+      round(m.monthly_return_pct, 4) AS ret_pct, round(m.category_avg_return_pct, 4) AS cat_pct,
+      CAST(m.better_than_avg AS INTEGER) AS beat,
+      CAST(m.outperformance_count_36 AS INTEGER) AS beat_36, CAST(m.comparable_months_36 AS INTEGER) AS comparable_36
+    FROM raw_monthly_returns m
+    JOIN universe u ON u.scheme_code = CAST(m.amfi_code AS VARCHAR)
+    WHERE m.monthly_return_pct IS NOT NULL
   `);
   for (const f of RAW_FILES) await run(`DROP TABLE raw_${f}`);
 }
